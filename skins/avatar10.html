@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Talking Avatar - 8-bit</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background-color: #000000;
+    color: #00ff44;
+    font-family: 'Courier New', Courier, monospace;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    /* Pattern a scacchi in stile 8-bit */
+    background-image:
+      linear-gradient(45deg, #001100 25%, transparent 25%, transparent 75%, #001100 75%),
+      linear-gradient(45deg, #001100 25%, transparent 25%, transparent 75%, #001100 75%);
+    background-size: 40px 40px;
+    background-position: 0 0, 20px 20px;
+    cursor: pointer;
+    position: relative;
+  }
+  /* Scanline CRT pesanti */
+  .crt-overlay {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: linear-gradient(rgba(0,0,0,0) 50%, rgba(0,40,0,0.5) 50%);
+    background-size: 100% 4px;
+    pointer-events: none; z-index: 9999;
+    animation: scanShift 0.1s linear infinite;
+  }
+  @keyframes scanShift {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 4px; }
+  }
+  /* Vignette CRT + curvatura schermo */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.9) 100%);
+    pointer-events: none;
+    z-index: 9998;
+  }
+
+  /* Cornice arcade */
+  .arcade-frame {
+    position: relative;
+    border: 6px solid #00ff44;
+    padding: 20px;
+    background-color: #000800;
+    box-shadow:
+      0 0 30px rgba(0,255,68,0.6),
+      inset 0 0 20px rgba(0,255,68,0.15),
+      0 0 0 3px #003300,
+      0 0 0 9px #000000,
+      0 0 0 12px #00ff44;
+    image-rendering: pixelated;
+  }
+
+  /* HUD in alto (stile arcade) */
+  .hud-arcade {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    color: #00ff44;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+    padding: 4px 0;
+    border-bottom: 2px dashed #00ff44;
+    text-transform: uppercase;
+    font-weight: bold;
+    text-shadow: 2px 2px 0 #003300;
+  }
+  .hud-arcade span {
+    color: #ffff44;
+  }
+
+  .avatar-container {
+    position: relative;
+    width: 480px;
+    height: 500px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    image-rendering: -moz-crisp-edges;
+  }
+
+  .status {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 14px;
+    color: #00ff44;
+    text-transform: uppercase;
+    letter-spacing: 6px;
+    text-align: center;
+    pointer-events: none;
+    animation: blinkStatus 1s step-end infinite;
+    z-index: 10;
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
+    text-shadow:
+      2px 2px 0 #003300,
+      0 0 12px rgba(0,255,68,0.8);
+  }
+  @keyframes blinkStatus {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0.4; }
+  }
+  .status.speaking { animation: none; opacity: 1; color: #ffff44; }
+  .status.done { animation: none; opacity: 0.6; }
+</style>
+</head>
+<body>
+<div class="crt-overlay"></div>
+
+<div class="arcade-frame">
+  <div class="hud-arcade">
+    <div>SCORE <span id="hudScore">0000</span></div>
+    <div>LVL <span id="hudLevel">01</span></div>
+    <div>LIVES <span id="hudLives">♥♥♥</span></div>
+  </div>
+
+  <div class="avatar-container" id="avatarContainer">
+    <canvas id="avatarCanvas" width="480" height="500"></canvas>
+  </div>
+</div>
+
+<div class="status" id="status">▶ Premi start</div>
+
+<script>
+// ============================================================
+// TESTO DA PRONUNCIARE
+// ============================================================
+const TESTO = "Ciao e benvenuto! Questo è un testo di prova per il mio avatar. Purtroppo a volte ci sono piccoli problemi, ma nessun errore grave. Attenzione però: il testo verrà letto utilizzando la sintesi vocale del browser. Wow, incredibile, vediamo se tutto funziona correttamente. Grazie e arrivederci!";
+
+// ============================================================
+// PALETTE 8-BIT (limitata, stile NES)
+// ============================================================
+const BLACK = '#000000';
+const DARK = '#001100';
+const GREEN_DARK = '#006622';
+const GREEN = '#00ff44';
+const GREEN_LIGHT = '#88ffaa';
+const YELLOW = '#ffff44';
+const CYAN = '#44ffff';
+const MAGENTA = '#ff44ff';
+const RED = '#ff4444';
+const WHITE = '#ffffff';
+const PIXEL = 6;   // dimensione del pixel base
+
+// ============================================================
+// CONFIGURAZIONE AUDIO
+// ============================================================
+const AUDIO_CONFIG = {
+  ambientVolume: 0.020,
+  syllableVolume: 0.10,
+  startBeepVolume: 0.13,
+  endBeepVolume: 0.13,
+  enabled: true
+};
+
+// ============================================================
+// DOM
+// ============================================================
+const canvas = document.getElementById('avatarCanvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const container = document.getElementById('avatarContainer');
+const hudScore = document.getElementById('hudScore');
+const hudLevel = document.getElementById('hudLevel');
+const hudLives = document.getElementById('hudLives');
+
+// ============================================================
+// STATO
+// ============================================================
+let isSpeaking = false;
+let mouthOpen = 0;
+let targetMouthOpen = 0;
+let time = 0;
+
+// Frame rate limitato per effetto 8-bit
+const FPS = 12;
+const FRAME_DURATION = 1000 / FPS;
+let lastFrameTime = 0;
+let frameCounter = 0;
+
+// Blink (a scatti)
+let eyeBlink = 0;
+let blinkTimer = 0;
+let nextBlinkAt = 6 + Math.floor(Math.random() * 10);  // in "frame 8-bit"
+let doubleBlink = false;
+let doubleBlinkDelay = 0;
+
+// Sbadiglio
+let yawnTimer = 0;
+let yawnCooldown = 30 + Math.floor(Math.random() * 30);
+let yawnActive = 0;
+let yawnPhase = 0;
+
+// Micro-smorfie bocca
+let mouthTwitchTimer = 0;
+let mouthTwitchNextAt = 8 + Math.floor(Math.random() * 12);
+let mouthTwitchActive = 0;
+let mouthTwitchPhase = 0;
+let mouthTwitchDir = 1;
+
+// Micro-movimenti sopracciglia
+let browTwitchTimer = 0;
+let browTwitchNextAt = 6 + Math.floor(Math.random() * 10);
+let browTwitchActive = 0;
+let browTwitchPhase = 0;
+let browTwitchAmount = 0;
+
+// Micro-drift capo (a scatti, "pixel step")
+let headDriftTimer = 0;
+let headDriftNextAt = 8 + Math.floor(Math.random() * 12);
+let headDriftStepX = 0;   // spostamenti interi in pixel
+let headDriftStepY = 0;
+let headDriftTargetX = 0;
+let headDriftTargetY = 0;
+
+// Dilatazione pupille (a scatti, valori interi)
+let pupilScale = 1;
+let pupilScaleTarget = 1;
+let pupilTimer = 0;
+let pupilNextAt = 12 + Math.floor(Math.random() * 15);
+
+// Wander
+let wanderActive = false;
+let wanderTimer = 0;
+let wanderNextAt = 10 + Math.floor(Math.random() * 15);
+let wanderTargetX = 0;
+let wanderTargetY = 0;
+let wanderReturnTimer = 0;
+
+// Saccadi (scatti netti)
+let saccadeTimer = 0;
+let saccadeNextAt = 3 + Math.floor(Math.random() * 5);
+let saccadeX = 0, saccadeY = 0;
+
+// Riflessione
+let reflectionTimer = 0;
+let reflectionNextAt = 100 + Math.floor(Math.random() * 100);
+let reflectionActive = 0;
+let reflectionPhase = 0;
+let reflectionTotalFrames = 20;
+
+// Respirazione (offset interi in pixel)
+let breathPhaseA = 0;
+let currentBreathOffset = 0;
+let breathStep = 0;
+let breathStepTimer = 0;
+
+// === SPECIFICO 8-BIT ===
+// Star field
+let stars = [];
+for (let i = 0; i < 30; i++) {
+  stars.push({
+    x: Math.floor(Math.random() * (canvas.width / PIXEL)) * PIXEL,
+    y: Math.floor(Math.random() * (canvas.height / PIXEL)) * PIXEL,
+    size: PIXEL,
+    brightness: Math.random() < 0.5 ? GREEN_DARK : GREEN,
+    twinklePhase: Math.floor(Math.random() * 10)
+  });
+}
+
+// Blocchi 8-bit che fluttuano (decorazioni)
+let blocks = [];
+let blockSpawnTimer = 0;
+let blockSpawnNextAt = 20;
+
+// Score e livello
+let score = 0;
+let level = 1;
+
+// Vite (cuori in pixel)
+let lives = 3;
+
+// Sguardo (in pixel interi)
+let eyeTargetPixelX = 0, eyeTargetPixelY = 0;
+let eyePixelX = 0, eyePixelY = 0;
+let mouseIsActive = false;
+let mouseMovedTimer = 0;
+
+// Emozione
+let currentEmotion = { browAngle: 0, browHeight: 0, mouthCurve: 0, eyeOpen: 1, mouthWidth: 80, headTilt: 0 };
+let targetEmotion = { ...currentEmotion };
+
+const EMOTION_KEYWORDS = {
+  felice: ['ciao','benvenuto','grazie','felice','bene','ottimo','grande','bello','amore','contento','evviva','bravo','sorriso','piacere'],
+  triste: ['purtroppo','triste','male','problema','difficile','brutto','dispiace','sofferenza','dolore','solo','perdere'],
+  arrabbiato: ['attenzione','pericolo','errore','grave','rabbia','basta','no','mai','inaccettabile','sbagliato'],
+  sorpreso: ['wow','incredibile','davvero','improvviso','inaspettato','sorpresa','caspita','accidenti','oh']
+};
+let activeEmotion = 'neutro';
+
+// ============================================================
+// WEB AUDIO (chiptune)
+// ============================================================
+let audioCtx = null;
+let ambientOsc = null;
+let ambientGain = null;
+
+function initAudioContext() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch (e) { console.warn('Web Audio non disponibile', e); }
+}
+
+function startAmbient() {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  if (ambientOsc) return;
+  // Chiptune drone (onda quadra)
+  ambientOsc = audioCtx.createOscillator();
+  ambientOsc.type = 'square';
+  ambientOsc.frequency.value = 55;
+  ambientGain = audioCtx.createGain();
+  ambientGain.gain.value = 0;
+  ambientGain.gain.linearRampToValueAtTime(AUDIO_CONFIG.ambientVolume, audioCtx.currentTime + 0.3);
+  ambientOsc.connect(ambientGain);
+  ambientGain.connect(audioCtx.destination);
+  ambientOsc.start();
+}
+
+function stopAmbient() {
+  if (!ambientOsc) return;
+  const now = audioCtx.currentTime;
+  ambientGain.gain.cancelScheduledValues(now);
+  ambientGain.gain.linearRampToValueAtTime(0, now + 0.2);
+  const osc = ambientOsc;
+  const gain = ambientGain;
+  ambientOsc = null;
+  ambientGain = null;
+  setTimeout(() => {
+    try { osc.stop(); } catch(e){}
+    try { osc.disconnect(); } catch(e){}
+    try { gain.disconnect(); } catch(e){}
+  }, 300);
+}
+
+function playBeep(freq, duration, volume, type) {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type || 'square';
+  osc.frequency.value = freq;
+  gain.gain.value = 0;
+  gain.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration + 0.05);
+}
+
+function playSyllableBeep(syllable) {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  // Frequenze stile NES (scala pentatonica chiptune)
+  let freq = 440;
+  if (syllable.includes('a')) freq = 440;
+  else if (syllable.includes('o')) freq = 392;
+  else if (syllable.includes('e')) freq = 523;
+  else if (syllable.includes('u')) freq = 330;
+  else if (syllable.includes('i')) freq = 587;
+  else freq = 262;
+  playBeep(freq, 0.05, AUDIO_CONFIG.syllableVolume, 'square');
+}
+
+function playStartBeep() {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  // Arpeggio classico 8-bit
+  playBeep(262, 0.08, AUDIO_CONFIG.startBeepVolume, 'square');
+  setTimeout(() => playBeep(330, 0.08, AUDIO_CONFIG.startBeepVolume, 'square'), 80);
+  setTimeout(() => playBeep(392, 0.08, AUDIO_CONFIG.startBeepVolume, 'square'), 160);
+  setTimeout(() => playBeep(523, 0.15, AUDIO_CONFIG.startBeepVolume, 'square'), 240);
+}
+
+function playEndBeep() {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  // Arpeggio discendente
+  playBeep(523, 0.08, AUDIO_CONFIG.endBeepVolume, 'square');
+  setTimeout(() => playBeep(392, 0.08, AUDIO_CONFIG.endBeepVolume, 'square'), 80);
+  setTimeout(() => playBeep(330, 0.08, AUDIO_CONFIG.endBeepVolume, 'square'), 160);
+  setTimeout(() => playBeep(262, 0.20, AUDIO_CONFIG.endBeepVolume, 'square'), 240);
+}
+
+function playPointSound() {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  // "Coin" classico
+  playBeep(988, 0.06, 0.08, 'square');
+  setTimeout(() => playBeep(1319, 0.15, 0.08, 'square'), 60);
+}
+
+// ============================================================
+// SILLABE
+// ============================================================
+function getSyllables(text) {
+  const words = text.toLowerCase().match(/[a-zàèéìòù]+/g) || [];
+  const result = [];
+  const vowels = 'aeiouàèéìòù';
+  for (const word of words) {
+    let currentSyl = '';
+    for (let i = 0; i < word.length; i++) {
+      currentSyl += word[i];
+      const isVowel = vowels.includes(word[i]);
+      const nextIsVowel = i + 1 < word.length && vowels.includes(word[i + 1]);
+      if (isVowel && !nextIsVowel) { result.push(currentSyl); currentSyl = ''; }
+    }
+    if (currentSyl) result.push(currentSyl);
+  }
+  return result;
+}
+
+function extractWords(text) {
+  const words = [];
+  const regex = /[a-zA-ZàèéìòùÀÈÉÌÒÙ]+/g;
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    words.push({ word: m[0].toLowerCase(), index: m.index });
+  }
+  return words;
+}
+
+// ============================================================
+// VOCI
+// ============================================================
+let selectedVoice = null;
+function pickItalianVoice() {
+  const voices = speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  let v = voices.find(v => v.lang === 'it-IT');
+  if (!v) v = voices.find(v => v.lang && v.lang.startsWith('it'));
+  if (!v) v = voices.find(v => v.lang && v.lang.startsWith('en'));
+  return v || voices[0];
+}
+function loadVoices() {
+  const v = pickItalianVoice();
+  if (v) { selectedVoice = v; console.log('[Avatar] Voce:', v.name, v.lang); }
+}
+if ('speechSynthesis' in window) {
+  speechSynthesis.onvoiceschanged = loadVoices;
+  loadVoices();
+}
+
+// ============================================================
+// EMOZIONI
+// ============================================================
+function detectEmotionForWord(word) {
+  for (const [emotion, keywords] of Object.entries(EMOTION_KEYWORDS)) {
+    if (keywords.includes(word)) return emotion;
+  }
+  return null;
+}
+function emotionParams(emotion) {
+  switch (emotion) {
+    case 'felice':    return { browAngle: 0.3, browHeight: -1, mouthCurve: 1, eyeOpen: 0.9, mouthWidth: 78, headTilt: 0 };
+    case 'triste':    return { browAngle: -0.6, browHeight: 1, mouthCurve: -1, eyeOpen: 0.7, mouthWidth: 60, headTilt: 0 };
+    case 'arrabbiato':return { browAngle: -1.0, browHeight: 1, mouthCurve: -0.8, eyeOpen: 0.85, mouthWidth: 78, headTilt: 0 };
+    case 'sorpreso':  return { browAngle: 0.5, browHeight: -2, mouthCurve: 0, eyeOpen: 1.4, mouthWidth: 72, headTilt: 0 };
+    default:          return { browAngle: 0, browHeight: 0, mouthCurve: 0, eyeOpen: 1, mouthWidth: 72, headTilt: 0 };
+  }
+}
+
+let wordsInText = [];
+let wordCursor = 0;
+let emotionHoldFrames = 0;
+
+function processNextWord() {
+  if (wordCursor >= wordsInText.length) return;
+  const w = wordsInText[wordCursor];
+  const detected = detectEmotionForWord(w.word);
+  if (detected) {
+    activeEmotion = detected;
+    emotionHoldFrames = 8;
+  }
+  // +1 punto per ogni parola
+  score += 10;
+  if (score > 9999) score = 0;
+  updateHud();
+  wordCursor++;
+}
+
+function updateHud() {
+  hudScore.textContent = String(score).padStart(4, '0');
+  hudLevel.textContent = String(level).padStart(2, '0');
+  hudLives.textContent = '♥'.repeat(lives);
+}
+
+// ============================================================
+// BOCCA
+// ============================================================
+let syllables = [];
+let currentSyllableIndex = 0;
+let syllableTimer = 0;
+let framesPerSyllable = 2;   // in frame 8-bit (veloce)
+let lastBeepedSyllable = -1;
+
+function updateMouthAnimation() {
+  if (!isSpeaking) {
+    targetMouthOpen = Math.abs(Math.sin(time * 0.5)) < 0.7 ? 0 : 0.15;
+    return;
+  }
+  syllableTimer++;
+  if (syllableTimer >= framesPerSyllable) {
+    syllableTimer = 0;
+    currentSyllableIndex++;
+    if (currentSyllableIndex >= syllables.length) currentSyllableIndex = 0;
+    if (currentSyllableIndex !== lastBeepedSyllable) {
+      lastBeepedSyllable = currentSyllableIndex;
+      playSyllableBeep(syllables[currentSyllableIndex] || '');
+    }
+    const syl = syllables[currentSyllableIndex] || '';
+    framesPerSyllable = 2 + Math.floor(Math.random() * 2);
+  }
+  const syl = syllables[currentSyllableIndex] || '';
+  // Apertura a valori discreti 8-bit
+  let openness = 0.4;
+  if (syl.includes('a')) openness = 1;
+  else if (syl.includes('o')) openness = 0.75;
+  else if (syl.includes('e')) openness = 0.5;
+  else if (syl.includes('u')) openness = 0.5;
+  else if (syl.includes('i')) openness = 0.25;
+  else openness = 0;
+  // Quantizza a valori discreti
+  targetMouthOpen = Math.round(openness * 4) / 4;   // 0, 0.25, 0.5, 0.75, 1
+}
+
+// ============================================================
+// ANIMAZIONI (in stile 8-bit a scatti)
+// ============================================================
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function updateEmotionAnimation() {
+  if (emotionHoldFrames > 0) {
+    emotionHoldFrames--;
+    if (emotionHoldFrames === 0) activeEmotion = 'neutro';
+  }
+  const params = emotionParams(activeEmotion);
+  Object.keys(params).forEach(k => targetEmotion[k] = params[k]);
+  Object.keys(currentEmotion).forEach(k => {
+    // Movimento a scatti (quantizzato)
+    const diff = targetEmotion[k] - currentEmotion[k];
+    if (Math.abs(diff) > 0.15) {
+      currentEmotion[k] += Math.sign(diff) * 0.15;
+    } else {
+      currentEmotion[k] = targetEmotion[k];
+    }
+  });
+}
+
+function updateBreath() {
+  // Offset interi (in pixel) a scatti
+  breathStepTimer++;
+  if (breathStepTimer > 3) {
+    breathStepTimer = 0;
+    breathPhaseA += 0.4;
+    // Offset calcolato come intero
+    currentBreathOffset = Math.round(Math.sin(breathPhaseA) * 2) * PIXEL / 3;
+  }
+}
+
+function updateBlink() {
+  blinkTimer++;
+  // Blink 8-bit: occhio chiuso per 2 frame 8-bit
+  if (doubleBlink) {
+    doubleBlinkDelay++;
+    if (doubleBlinkDelay === 2) eyeBlink = 1;
+    else if (doubleBlinkDelay === 4) eyeBlink = 0;
+    else if (doubleBlinkDelay === 6) eyeBlink = 1;
+    else if (doubleBlinkDelay >= 8) {
+      eyeBlink = 0; doubleBlink = false; doubleBlinkDelay = 0;
+      nextBlinkAt = blinkTimer + 6 + Math.floor(Math.random() * 10);
+    }
+    return;
+  }
+  if (blinkTimer >= nextBlinkAt) {
+    eyeBlink = 1;
+    if (blinkTimer >= nextBlinkAt + 2) {
+      eyeBlink = 0;
+      if (Math.random() < 0.2) {
+        doubleBlink = true; doubleBlinkDelay = 0;
+      } else {
+        nextBlinkAt = blinkTimer + 6 + Math.floor(Math.random() * 10);
+      }
+    }
+  }
+}
+
+function updateYawn() {
+  if (isSpeaking) { yawnActive = 0; return; }
+  yawnTimer++;
+  if (yawnTimer > yawnCooldown && yawnActive === 0) { yawnActive = 0.01; yawnPhase = 0; }
+  if (yawnActive > 0) {
+    yawnPhase++;
+    const totalFrames = 20;
+    if (yawnPhase < 5) yawnActive = 0.5;
+    else if (yawnPhase < 14) yawnActive = 1;
+    else if (yawnPhase < totalFrames) yawnActive = 0.25;
+    else { yawnActive = 0; yawnTimer = 0; yawnCooldown = 30 + Math.floor(Math.random() * 30); }
+  }
+}
+
+function updateMouthTwitch() {
+  if (isSpeaking) {
+    mouthTwitchActive = 0;
+    mouthTwitchTimer = 0;
+    return;
+  }
+  mouthTwitchTimer++;
+  if (mouthTwitchTimer > mouthTwitchNextAt && mouthTwitchActive === 0) {
+    mouthTwitchActive = 0.5;
+    mouthTwitchPhase = 0;
+    mouthTwitchDir = Math.random() < 0.5 ? 1 : -1;
+  }
+  if (mouthTwitchActive > 0) {
+    mouthTwitchPhase++;
+    if (mouthTwitchPhase > 4) {
+      mouthTwitchActive = 0;
+      mouthTwitchTimer = 0;
+      mouthTwitchNextAt = 8 + Math.floor(Math.random() * 12);
+    }
+  }
+}
+
+function updateBrowTwitch() {
+  if (isSpeaking) {
+    browTwitchActive = 0;
+    return;
+  }
+  browTwitchTimer++;
+  if (browTwitchTimer > browTwitchNextAt && browTwitchActive === 0) {
+    browTwitchActive = 1;
+    browTwitchPhase = 0;
+  }
+  if (browTwitchActive > 0) {
+    browTwitchPhase++;
+    if (browTwitchPhase > 6) {
+      browTwitchActive = 0;
+      browTwitchTimer = 0;
+      browTwitchNextAt = 6 + Math.floor(Math.random() * 10);
+    }
+  }
+  browTwitchAmount = browTwitchActive * 1 * PIXEL / 3;
+}
+
+function updateHeadDrift() {
+  if (isSpeaking) {
+    headDriftTargetX = 0;
+    headDriftTargetY = 0;
+    return;
+  }
+  headDriftTimer++;
+  if (headDriftTimer > headDriftNextAt) {
+    // Spostamenti interi in pixel
+    headDriftTargetX = (Math.random() < 0.5 ? -1 : 1) * (Math.random() < 0.5 ? 0 : PIXEL / 2);
+    headDriftTargetY = 0;
+    headDriftTimer = 0;
+    headDriftNextAt = 8 + Math.floor(Math.random() * 12);
+  }
+  // Movimento a scatti
+  if (headDriftTargetX > headDriftStepX) headDriftStepX += PIXEL / 3;
+  else if (headDriftTargetX < headDriftStepX) headDriftStepX -= PIXEL / 3;
+  if (Math.abs(headDriftTargetX - headDriftStepX) < PIXEL / 3) headDriftStepX = headDriftTargetX;
+}
+
+function updatePupilDilation() {
+  pupilTimer++;
+  if (pupilTimer > pupilNextAt) {
+    // Valori discreti
+    pupilScaleTarget = [0.75, 1, 1.25][Math.floor(Math.random() * 3)];
+    pupilTimer = 0;
+    pupilNextAt = 12 + Math.floor(Math.random() * 15);
+  }
+  pupilScale = pupilScaleTarget;   // scatto immediato
+}
+
+function updateWander() {
+  if (isSpeaking) { wanderActive = false; return; }
+  if (mouseIsActive) { wanderActive = false; return; }
+  wanderTimer++;
+  if (wanderTimer > wanderNextAt) {
+    // Spostamenti in pixel interi
+    wanderTargetX = Math.floor((Math.random() - 0.5) * 8);
+    wanderTargetY = Math.floor((Math.random() - 0.5) * 4);
+    wanderTimer = 0;
+    wanderNextAt = 10 + Math.floor(Math.random() * 15);
+    wanderActive = true;
+    wanderReturnTimer = 0;
+  }
+  if (wanderActive) {
+    wanderReturnTimer++;
+    if (wanderReturnTimer > 15) {
+      wanderTargetX = 0; wanderTargetY = 0;
+      wanderActive = false;
+    }
+  }
+}
+
+function updateSaccades() {
+  if (isSpeaking) {
+    saccadeX = 0; saccadeY = 0;
+    return;
+  }
+  saccadeTimer++;
+  if (saccadeTimer > saccadeNextAt) {
+    // Scatti interi
+    saccadeX = (Math.random() - 0.5) * 1.5;
+    saccadeY = (Math.random() - 0.5) * 1.5;
+    saccadeTimer = 0;
+    saccadeNextAt = 3 + Math.floor(Math.random() * 5);
+  }
+}
+
+function updateReflection() {
+  if (isSpeaking) { reflectionActive = 0; reflectionTimer = 0; return; }
+  reflectionTimer++;
+  if (reflectionTimer > reflectionNextAt && reflectionActive === 0) {
+    reflectionActive = 0.01;
+    reflectionPhase = 0;
+  }
+  if (reflectionActive > 0) {
+    reflectionPhase++;
+    const totalFrames = reflectionTotalFrames;
+    if (reflectionPhase < 5) reflectionActive = 0.5;
+    else if (reflectionPhase < 15) reflectionActive = 1;
+    else if (reflectionPhase < totalFrames) reflectionActive = 0.25;
+    else {
+      reflectionActive = 0;
+      reflectionTimer = 0;
+      reflectionNextAt = 100 + Math.floor(Math.random() * 100);
+    }
+  }
+}
+
+document.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const ccx = rect.left + rect.width / 2;
+  const ccy = rect.top + rect.height / 2;
+  const dx = e.clientX - ccx, dy = e.clientY - ccy;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const maxOffset = 5;
+  if (dist > 0) {
+    const factor = Math.min(1, dist / 400);
+    eyeTargetPixelX = Math.round((dx / dist) * maxOffset * factor);
+    eyeTargetPixelY = Math.round((dy / dist) * maxOffset * factor);
+  }
+  mouseIsActive = true;
+  mouseMovedTimer = 0;
+});
+
+function updateGaze() {
+  mouseMovedTimer++;
+  if (mouseMovedTimer > 60) mouseIsActive = false;
+  if (isSpeaking) {
+    eyeTargetPixelX = Math.round(Math.sin(time * 0.5) * 1.5);
+    eyeTargetPixelY = Math.round(Math.sin(time * 0.7) * 1);
+  } else if (mouseIsActive) {
+    // già aggiornato
+  } else if (wanderActive) {
+    eyeTargetPixelX = wanderTargetX;
+    eyeTargetPixelY = wanderTargetY;
+  } else {
+    eyeTargetPixelX = 0;
+    eyeTargetPixelY = 0;
+  }
+  // Movimento a scatti verso il target
+  if (Math.abs(eyePixelX - eyeTargetPixelX) > 0.5) {
+    eyePixelX += Math.sign(eyeTargetPixelX - eyePixelX) * 0.5;
+  } else {
+    eyePixelX = eyeTargetPixelX;
+  }
+  if (Math.abs(eyePixelY - eyeTargetPixelY) > 0.5) {
+    eyePixelY += Math.sign(eyeTargetPixelY - eyePixelY) * 0.5;
+  } else {
+    eyePixelY = eyeTargetPixelY;
+  }
+}
+
+// === SPECIFICO 8-BIT ===
+function updateStars() {
+  stars.forEach(s => {
+    s.twinklePhase = (s.twinklePhase + 1) % 20;
+  });
+}
+
+function updateBlocks() {
+  blockSpawnTimer++;
+  if (blockSpawnTimer > blockSpawnNextAt) {
+    blockSpawnTimer = 0;
+    blockSpawnNextAt = 15 + Math.floor(Math.random() * 20);
+    blocks.push({
+      x: Math.floor(Math.random() * (canvas.width / PIXEL)) * PIXEL,
+      y: canvas.height,
+      color: [GREEN, YELLOW, CYAN, MAGENTA][Math.floor(Math.random() * 4)],
+      speed: 1 + Math.floor(Math.random() * 2),
+      size: PIXEL * (1 + Math.floor(Math.random() * 2))
+    });
+  }
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    blocks[i].y -= blocks[i].speed;
+    if (blocks[i].y < -blocks[i].size) blocks.splice(i, 1);
+  }
+}
+
+// ============================================================
+// DISEGNO — STILE 8-BIT
+// ============================================================
+function drawAvatar() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Sfondo a pattern
+  drawBackgroundPattern();
+
+  // Star field
+  updateStars();
+  drawStars();
+
+  // Blocchi decorativi che fluttuano
+  updateBlocks();
+  drawBlocks();
+
+  // Offset totale (respiro + drift)
+  const totalOffsetX = headDriftStepX;
+  const totalOffsetY = currentBreathOffset + headDriftStepY;
+
+  const cx = Math.round(canvas.width / 2 / PIXEL) * PIXEL + totalOffsetX;
+  const cy = Math.round(canvas.height / 2 / PIXEL) * PIXEL + totalOffsetY;
+
+  // Ombra/base sotto l'avatar (piattaforma arcade)
+  drawPlatform(cx, cy);
+
+  // Aura effetto 8-bit (pixel che pulsano attorno)
+  drawPixelAura(cx, cy);
+
+  // TESTA
+  drawHead8Bit(cx, cy);
+
+  // Capelli
+  drawHair8Bit(cx, cy);
+
+  // Occhi
+  drawEyes8Bit(cx, cy);
+
+  // Sopracciglia
+  drawBrows8Bit(cx, cy);
+
+  // Bocca
+  drawMouth8Bit(cx, cy);
+
+  // Effetti speciali (cuori, stelle, sudore)
+  drawEffects8Bit(cx, cy);
+
+  // Aggiorna HUD
+  hudLevel.textContent = String(level).padStart(2, '0');
+}
+
+// === SFONDO PATTERN ===
+function drawBackgroundPattern() {
+  // Linee diagonali sottili in stile 8-bit
+  ctx.save();
+  ctx.strokeStyle = GREEN_DARK;
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.3;
+  for (let i = -canvas.height; i < canvas.width; i += PIXEL * 4) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + canvas.height, canvas.height);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// === STELLE ===
+function drawStars() {
+  ctx.save();
+  stars.forEach(s => {
+    const visible = s.twinklePhase < 14;   // blink a scatti
+    if (visible) {
+      ctx.fillStyle = s.brightness;
+      ctx.fillRect(s.x, s.y, s.size, s.size);
+    }
+  });
+  ctx.restore();
+}
+
+// === BLOCCHI FLUTTUANTI ===
+function drawBlocks() {
+  ctx.save();
+  blocks.forEach(b => {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(b.x, b.y, b.size, b.size);
+    // Bordo scuro (per effetto pixel)
+    ctx.strokeStyle = BLACK;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.size - 1, b.size - 1);
+  });
+  ctx.restore();
+}
+
+// === PIATTAFORMA ===
+function drawPlatform(cx, cy) {
+  ctx.save();
+  const py = cy + 220;
+  // Base della piattaforma
+  ctx.fillStyle = GREEN_DARK;
+  ctx.fillRect(cx - 140, py, 280, PIXEL);
+  ctx.fillStyle = GREEN;
+  ctx.fillRect(cx - 140, py, 280, 2);
+  // Blocchi sotto
+  ctx.fillStyle = GREEN_DARK;
+  for (let i = 0; i < 10; i++) {
+    ctx.fillRect(cx - 140 + i * 28, py + PIXEL, 24, PIXEL);
+  }
+  ctx.restore();
+}
+
+// === AURA PIXEL ===
+function drawPixelAura(cx, cy) {
+  ctx.save();
+  const auraIntensity = isSpeaking ? 0.6 + mouthOpen * 0.4 : 0.3;
+  ctx.globalAlpha = auraIntensity;
+
+  // Pixel che fluttuano attorno alla testa
+  const pixelCount = 20;
+  for (let i = 0; i < pixelCount; i++) {
+    const angle = (i / pixelCount) * Math.PI * 2 + time * 0.5;
+    const radius = 130 + Math.sin(time * 2 + i) * 15;
+    const px = cx + Math.round(Math.cos(angle) * radius / PIXEL) * PIXEL;
+    const py = cy + Math.round(Math.sin(angle) * radius / PIXEL) * PIXEL;
+
+    // Colore alternato (blink)
+    const visible = (Math.floor(time * 4) + i) % 3 !== 0;
+    if (visible) {
+      ctx.fillStyle = i % 2 === 0 ? GREEN : CYAN;
+      ctx.fillRect(px - PIXEL / 2, py - PIXEL / 2, PIXEL, PIXEL);
+    }
+  }
+  ctx.restore();
+}
+
+// === TESTA 8-BIT ===
+function drawHead8Bit(cx, cy) {
+  ctx.save();
+
+  // Testa = grande rettangolo con angoli smussati a pixel
+  const headW = 20 * PIXEL;   // 120 px
+  const headH = 22 * PIXEL;   // 132 px
+  const hx = cx - headW / 2;
+  const hy = cy - headH / 2;
+
+  // Base testa (verde)
+  ctx.fillStyle = GREEN;
+  ctx.fillRect(hx, hy, headW, headH);
+
+  // Pannello più chiaro al centro (skin)
+  ctx.fillStyle = GREEN_LIGHT;
+  ctx.fillRect(hx + PIXEL, hy + PIXEL, headW - 2 * PIXEL, headH - 2 * PIXEL);
+
+  // Bordo scuro (outline)
+  ctx.strokeStyle = GREEN_DARK;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(hx, hy, headW, headH);
+
+  // Angoli smussati a pixel (rimuovi i 4 angoli)
+  ctx.fillStyle = BLACK;
+  ctx.fillRect(hx, hy, PIXEL, PIXEL);
+  ctx.fillRect(hx + headW - PIXEL, hy, PIXEL, PIXEL);
+  ctx.fillRect(hx, hy + headH - PIXEL, PIXEL, PIXEL);
+  ctx.fillRect(hx + headW - PIXEL, hy + headH - PIXEL, PIXEL, PIXEL);
+
+  ctx.restore();
+}
+
+// === CAPELLI 8-BIT ===
+function drawHair8Bit(cx, cy) {
+  ctx.save();
+  const headW = 20 * PIXEL;
+  const headH = 22 * PIXEL;
+  const hx = cx - headW / 2;
+  const hy = cy - headH / 2;
+
+  // Ciuffo sopra la testa
+  ctx.fillStyle = GREEN_DARK;
+  for (let i = -4; i <= 4; i++) {
+    const px = cx + i * PIXEL * 2;
+    const py = hy - PIXEL * (2 + Math.abs(i));
+    ctx.fillRect(px, py, PIXEL, PIXEL * (2 + Math.abs(i)));
+  }
+  // Frangia
+  ctx.fillRect(hx, hy - PIXEL, headW, PIXEL);
+
+  ctx.restore();
+}
+
+// === OCCHI 8-BIT ===
+function drawEyes8Bit(cx, cy) {
+  const eyeY = cy - 10;
+  const eyeOffsetX = 30;
+
+  drawPixelEye(cx - eyeOffsetX, eyeY);
+  drawPixelEye(cx + eyeOffsetX, eyeY);
+}
+
+function drawPixelEye(x, y) {
+  ctx.save();
+
+  // Base occhio (rettangolo)
+  const eyeW = 6 * PIXEL;
+  const eyeH = 6 * PIXEL;
+
+  // Se chiuso (blink)
+  if (eyeBlink > 0) {
+    ctx.fillStyle = GREEN_DARK;
+    ctx.fillRect(x - eyeW / 2, y - 1, eyeW, 3);
+    ctx.restore();
+    return;
+  }
+
+  // Sfondo bianco/verde chiaro
+  ctx.fillStyle = WHITE;
+  ctx.fillRect(x - eyeW / 2, y - eyeH / 2, eyeW, eyeH);
+
+  // Bordo
+  ctx.strokeStyle = GREEN_DARK;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x - eyeW / 2, y - eyeH / 2, eyeW, eyeH);
+
+  // Pupilla (posizione con sguardo)
+  const px = Math.round(eyePixelX / 2) * 2;
+  const py = Math.round(eyePixelY / 2) * 2;
+
+  // Pupilla verde (blocchi pixel)
+  ctx.fillStyle = GREEN_DARK;
+  const pupilSize = pupilScale > 1.1 ? 3 : (pupilScale < 0.9 ? 1 : 2);
+  ctx.fillRect(
+    x + px - PIXEL * pupilSize / 2,
+    y + py - PIXEL * pupilSize / 2,
+    PIXEL * pupilSize,
+    PIXEL * pupilSize
+  );
+
+  // Riflesso (singolo pixel bianco)
+  ctx.fillStyle = WHITE;
+  ctx.fillRect(x + px - PIXEL, y + py - PIXEL, PIXEL / 2, PIXEL / 2);
+
+  // Bordo inferiore più spesso (ciglia)
+  ctx.fillStyle = GREEN_DARK;
+  ctx.fillRect(x - eyeW / 2, y + eyeH / 2 - 2, eyeW, 2);
+
+  ctx.restore();
+}
+
+// === SOPRACCIGLIA 8-BIT ===
+function drawBrows8Bit(cx, cy) {
+  const browY = cy - 30;
+  const browOffsetX = 30;
+
+  drawPixelBrow(cx - browOffsetX, browY, 1);
+  drawPixelBrow(cx + browOffsetX, browY, -1);
+}
+
+function drawPixelBrow(x, y, side) {
+  ctx.save();
+  const browW = 6 * PIXEL;
+
+  // Offset verticale in base all'emozione e al twitch
+  const browY = y - Math.round(currentEmotion.browHeight) - Math.round(browTwitchAmount);
+  const angle = currentEmotion.browAngle * 0.3;
+  const reflectAngle = reflectionActive * -0.1 * side;
+  const finalAngle = angle + reflectAngle;
+
+  // Disegna sopracciglio come serie di pixel a scalini
+  ctx.fillStyle = GREEN_DARK;
+  const steps = 6;
+  for (let i = 0; i < steps; i++) {
+    const t = i / (steps - 1);
+    const px = x - browW / 2 + i * PIXEL;
+    // Il lato interno è più alto/basso a seconda dell'inclinazione
+    const offsetY = Math.round(finalAngle * browW * (0.5 - t)) * 1;
+    ctx.fillRect(px, browY + offsetY, PIXEL, PIXEL);
+    // Secondo pixel sotto per spessore
+    ctx.fillRect(px, browY + offsetY + PIXEL, PIXEL, PIXEL * 0.5);
+  }
+  ctx.restore();
+}
+
+// === BOCCA 8-BIT ===
+function drawMouth8Bit(cx, cy) {
+  ctx.save();
+  const mouthY = cy + 45;
+  const mouthWidth = Math.round(currentEmotion.mouthWidth / PIXEL) * PIXEL;
+
+  // Aggiungi yawn
+  const combinedOpen = Math.max(mouthOpen, yawnActive);
+
+  if (combinedOpen > 0.3) {
+    // Bocca aperta: rettangolo/pixel
+    const mouthH = Math.round(combinedOpen * 4) * PIXEL;
+    const mhx = cx - mouthWidth / 2;
+    const mhy = mouthY - mouthH / 2;
+
+    // Interno bocca (scuro)
+    ctx.fillStyle = GREEN_DARK;
+    ctx.fillRect(mhx, mhy, mouthWidth, mouthH);
+
+    // Bordo
+    ctx.strokeStyle = GREEN;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(mhx, mhy, mouthWidth, mouthH);
+
+    // Denti (blocchi bianchi in alto)
+    if (combinedOpen > 0.7) {
+      ctx.fillStyle = WHITE;
+      ctx.fillRect(mhx + PIXEL, mhy + PIXEL, mouthWidth - 2 * PIXEL, PIXEL);
+    }
+  } else {
+    // Bocca chiusa: linea di pixel
+    const curve = currentEmotion.mouthCurve + reflectionActive * -0.3;
+    const twitch = mouthTwitchActive * mouthTwitchDir;
+    const finalCurve = curve + twitch * 0.5;
+
+    const pixels = Math.round(mouthWidth / PIXEL);
+    const mid = (pixels - 1) / 2;
+
+    ctx.fillStyle = GREEN_DARK;
+    for (let i = 0; i < pixels; i++) {
+      const t = (i - mid) / mid;   // -1..1
+      const px = cx - mouthWidth / 2 + i * PIXEL;
+      // Curva: parte dritta agli estremi, curva al centro
+      const curveAmount = Math.round(finalCurve * 2 * (1 - Math.abs(t)));
+      const py = mouthY + curveAmount * (PIXEL / 2);
+      ctx.fillRect(px, py, PIXEL, PIXEL);
+    }
+  }
+
+  ctx.restore();
+}
+
+// === EFFETTI 8-BIT (cuori, stelle, ecc.) ===
+function drawEffects8Bit(cx, cy) {
+  // Cuori quando è felice
+  if (activeEmotion === 'felice' && Math.random() < 0.15) {
+    // Cuore pixel (forma 8-bit)
+    const hx = cx + (Math.random() - 0.5) * 200;
+    const hy = cy - 100 - Math.random() * 100;
+    drawPixelHeart(hx, hy);
+  }
+  // Stelle quando è sorpreso
+  if (activeEmotion === 'sorpreso' && Math.random() < 0.2) {
+    const sx = cx + (Math.random() - 0.5) * 220;
+    const sy = cy + (Math.random() - 0.5) * 180;
+    drawPixelStar(sx, sy);
+  }
+  // Goccia di sudore quando è arrabbiato/triste
+  if ((activeEmotion === 'arrabbiato' || activeEmotion === 'triste') && Math.random() < 0.1) {
+    const sx = cx + 80;
+    const sy = cy - 40;
+    drawPixelSweat(sx, sy);
+  }
+}
+
+function drawPixelHeart(x, y) {
+  // Cuore 8-bit: 7x6 pixel
+  const pattern = [
+    [1,0,1,0,1,0,0],
+    [1,1,1,1,1,0,0],
+    [1,1,1,1,1,0,0],
+    [0,1,1,1,0,0,0],
+    [0,0,1,0,0,0,0]
+  ];
+  ctx.save();
+  ctx.fillStyle = RED;
+  for (let row = 0; row < pattern.length; row++) {
+    for (let col = 0; col < pattern[row].length; col++) {
+      if (pattern[row][col]) {
+        ctx.fillRect(x + col * PIXEL - 20, y + row * PIXEL, PIXEL, PIXEL);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawPixelStar(x, y) {
+  // Stella 8-bit: 5x5
+  const pattern = [
+    [0,0,1,0,0],
+    [1,1,1,1,1],
+    [0,1,1,1,0],
+    [1,0,1,0,1],
+    [1,0,0,0,1]
+  ];
+  ctx.save();
+  ctx.fillStyle = YELLOW;
+  for (let row = 0; row < pattern.length; row++) {
+    for (let col = 0; col < pattern[row].length; col++) {
+      if (pattern[row][col]) {
+        ctx.fillRect(x + col * PIXEL, y + row * PIXEL, PIXEL, PIXEL);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawPixelSweat(x, y) {
+  // Goccia di sudore 8-bit
+  const pattern = [
+    [0,1,0],
+    [1,1,1],
+    [1,1,1],
+    [0,1,0]
+  ];
+  ctx.save();
+  ctx.fillStyle = CYAN;
+  for (let row = 0; row < pattern.length; row++) {
+    for (let col = 0; col < pattern[row].length; col++) {
+      if (pattern[row][col]) {
+        ctx.fillRect(x + col * PIXEL, y + row * PIXEL, PIXEL, PIXEL);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+// ============================================================
+// LOOP — con FPS limitato per effetto 8-bit
+// ============================================================
+function renderLoop(currentTime) {
+  if (currentTime - lastFrameTime >= FRAME_DURATION) {
+    lastFrameTime = currentTime;
+    frameCounter++;
+    time += 0.05;   // il tempo avanza più velocemente per compensare
+
+    // Aggiorna stato
+    updateEmotionAnimation();
+    updateBreath();
+    updateBlink();
+    updateYawn();
+    updateMouthTwitch();
+    updateBrowTwitch();
+    updateHeadDrift();
+    updatePupilDilation();
+    updateWander();
+    updateSaccades();
+    updateReflection();
+    updateGaze();
+
+    if (frameCounter % 6 === 0) {
+      updateMouthAnimation();
+    }
+
+    // Disegna
+    drawAvatar();
+  }
+  requestAnimationFrame(renderLoop);
+}
+
+// ============================================================
+// SINTESI VOCALE + TOGGLE
+// ============================================================
+let utterance = null;
+let fallbackWordInterval = null;
+
+function updateStatus(text, cls) {
+  statusEl.innerText = text;
+  statusEl.classList.remove('speaking', 'done');
+  if (cls) statusEl.classList.add(cls);
+}
+
+function speak() {
+  if (!('speechSynthesis' in window)) {
+    updateStatus('⚠ Sintesi vocale non supportata');
+    return;
+  }
+  window.speechSynthesis.cancel();
+  if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+
+  initAudioContext();
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+  syllables = getSyllables(TESTO);
+  wordsInText = extractWords(TESTO);
+  currentSyllableIndex = 0;
+  syllableTimer = 0;
+  framesPerSyllable = 2;
+  wordCursor = 0;
+  activeEmotion = 'neutro';
+  emotionHoldFrames = 0;
+  lastBeepedSyllable = -1;
+  score = 0;
+  lives = 3;
+  updateHud();
+
+  utterance = new SpeechSynthesisUtterance(TESTO);
+  utterance.lang = 'it-IT';
+  utterance.rate = 1.0;
+  utterance.pitch = 1.2;   // pitch alto per voce "cartoon"
+  utterance.volume = 1;
+  if (selectedVoice) utterance.voice = selectedVoice;
+
+  utterance.onstart = () => {
+    isSpeaking = true;
+    container.classList.add('speaking');
+    updateStatus('■ Premi stop', 'speaking');
+    playStartBeep();
+    startAmbient();
+  };
+
+  utterance.onboundary = (e) => {
+    if (e.name === 'word') processNextWord();
+  };
+
+  utterance.onend = () => {
+    isSpeaking = false;
+    targetMouthOpen = 0;
+    activeEmotion = 'neutro';
+    emotionHoldFrames = 0;
+    container.classList.remove('speaking');
+    updateStatus('✓ GAME OVER — clicca per rigiocare', 'done');
+    playEndBeep();
+    stopAmbient();
+    if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+  };
+
+  utterance.onerror = (e) => {
+    console.error(e);
+    isSpeaking = false;
+    targetMouthOpen = 0;
+    activeEmotion = 'neutro';
+    emotionHoldFrames = 0;
+    container.classList.remove('speaking');
+    updateStatus('✗ Errore — clicca per riprovare', 'done');
+    stopAmbient();
+    if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+  };
+
+  fallbackWordInterval = setInterval(() => {
+    if (!isSpeaking) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; return; }
+    processNextWord();
+  }, 350);
+
+  speechSynthesis.speak(utterance);
+}
+
+function stopSpeaking() {
+  speechSynthesis.cancel();
+  if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+  isSpeaking = false;
+  targetMouthOpen = 0;
+  activeEmotion = 'neutro';
+  emotionHoldFrames = 0;
+  container.classList.remove('speaking');
+  updateStatus('▶ Premi start');
+  stopAmbient();
+}
+
+function toggleSpeech() {
+  if (isSpeaking) stopSpeaking();
+  else speak();
+}
+
+document.body.addEventListener('click', toggleSpeech);
+document.body.addEventListener('touchstart', function(e) {
+  e.preventDefault();
+  toggleSpeech();
+}, { passive: false });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault();
+    toggleSpeech();
+  } else if (e.key === 'Escape') {
+    if (isSpeaking) stopSpeaking();
+  }
+});
+
+// ============================================================
+// AVVIO
+// ============================================================
+updateHud();
+requestAnimationFrame(renderLoop);
+</script>
+</body>
+</html>

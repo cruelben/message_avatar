@@ -1,0 +1,1455 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Talking Avatar - Anime</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background-color: #1a0a20;
+    color: #ff99cc;
+    font-family: 'Courier New', Courier, monospace;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    background-image:
+      radial-gradient(circle at 50% 40%, rgba(255,150,220,0.15) 0%, transparent 70%),
+      radial-gradient(circle at 50% 80%, rgba(150,200,255,0.10) 0%, transparent 70%);
+    cursor: pointer;
+    position: relative;
+  }
+  /* Scanline CRT leggere per look vintage */
+  .crt-overlay {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background:
+      linear-gradient(rgba(0,0,0,0) 50%, rgba(40,0,30,0.15) 50%);
+    background-size: 100% 4px;
+    pointer-events: none; z-index: 9999;
+    animation: flicker 0.2s infinite;
+  }
+  @keyframes flicker { 0%{opacity:.98} 50%{opacity:.95} 100%{opacity:.98} }
+
+  .avatar-container {
+    position: relative; width: 520px; height: 520px;
+    display: flex; justify-content: center; align-items: center;
+    flex-shrink: 0;
+    pointer-events: none;
+    z-index: 1;
+    filter: drop-shadow(0 0 20px rgba(255,150,220,0.3));
+  }
+  canvas { display: block; }
+
+  .status {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 13px;
+    color: #ff99cc;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+    text-shadow: 0 0 8px rgba(255,150,220,0.8);
+    text-align: center;
+    pointer-events: none;
+    animation: breathe 2.5s ease-in-out infinite;
+    z-index: 10;
+    font-weight: bold;
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
+  .status.speaking { animation: none; opacity: 1; color: #ffccdd; }
+  .status.done { animation: none; opacity: 0.5; }
+</style>
+</head>
+<body>
+<div class="crt-overlay"></div>
+
+<div class="avatar-container" id="avatarContainer">
+  <canvas id="avatarCanvas" width="520" height="520"></canvas>
+</div>
+
+<div class="status" id="status">clicca o premi un tasto</div>
+
+<script>
+// ============================================================
+// TESTO DA PRONUNCIARE
+// ============================================================
+const TESTO = "Ciao e benvenuto! Questo è un testo di prova per il mio avatar. Purtroppo a volte ci sono piccoli problemi, ma nessun errore grave. Attenzione però: il testo verrà letto utilizzando la sintesi vocale del browser. Wow, incredibile, vediamo se tutto funziona correttamente. Grazie e arrivederci!";
+
+// ============================================================
+// PALETTE ANIME
+// ============================================================
+const COLOR_SKIN = '#ffe0d5';        // pelle chiara
+const COLOR_SKIN_SHADOW = '#f5c0b0'; // ombra pelle
+const COLOR_HAIR = '#c84cff';        // capelli viola neon
+const COLOR_HAIR_LIGHT = '#e878ff';  // capelli highlight
+const COLOR_EYE_WHITE = '#ffffff';
+const COLOR_EYE_IRIS_1 = '#66ddff';  // iride azzurro
+const COLOR_EYE_IRIS_2 = '#3a99cc';  // iride scuro
+const COLOR_EYE_PUPIL = '#1a2244';   // pupilla scura
+const COLOR_EYE_REFLECTION = '#ffffff';
+const COLOR_BROW = '#8a3aa8';        // sopracciglia viola scuro
+const COLOR_LIP = '#e85a7a';         // labbra rosa
+const COLOR_BLUSH = 'rgba(255,150,180,0.4)'; // blush guance
+const COLOR_OUTLINE = '#3a1540';     // contorni scuri
+const COLOR_MOUTH_INNER = '#8a2a4a'; // interno bocca
+
+// ============================================================
+// CONFIGURAZIONE AUDIO
+// ============================================================
+const AUDIO_CONFIG = {
+  ambientVolume: 0.025,
+  syllableVolume: 0.085,
+  startBeepVolume: 0.13,
+  endBeepVolume: 0.13,
+  enabled: true
+};
+
+// ============================================================
+// DOM
+// ============================================================
+const canvas = document.getElementById('avatarCanvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const container = document.getElementById('avatarContainer');
+
+// ============================================================
+// STATO
+// ============================================================
+let isSpeaking = false;
+let mouthOpen = 0;
+let targetMouthOpen = 0;
+let time = 0;
+
+// Blink (con palpebra visibile)
+let eyeBlink = 0;       // 0 = aperto, 1 = chiuso
+let blinkTimer = 0;
+let nextBlinkAt = 150 + Math.random() * 200;
+let doubleBlink = false;
+let doubleBlinkDelay = 0;
+
+// Sbadiglio
+let yawnTimer = 0;
+let yawnCooldown = 800 + Math.random() * 800;
+let yawnActive = 0;
+let yawnPhase = 0;
+
+// Micro-smorfie bocca
+let mouthTwitchTimer = 0;
+let mouthTwitchNextAt = 120 + Math.random() * 180;
+let mouthTwitchActive = 0;
+let mouthTwitchPhase = 0;
+let mouthTwitchDir = 1;
+
+// Micro-movimenti sopracciglia
+let browTwitchTimer = 0;
+let browTwitchNextAt = 100 + Math.random() * 200;
+let browTwitchActive = 0;
+let browTwitchPhase = 0;
+let browTwitchAmount = 0;
+
+// Micro-drift capo
+let headDriftTimer = 0;
+let headDriftNextAt = 90 + Math.random() * 150;
+let headDriftTarget = 0;
+let headDriftCurrent = 0;
+
+// Dilatazione pupille
+let pupilScale = 1;
+let pupilScaleTarget = 1;
+let pupilTimer = 0;
+let pupilNextAt = 180 + Math.random() * 240;
+
+// Wander
+let wanderActive = false;
+let wanderTimer = 0;
+let wanderNextAt = 120 + Math.random() * 180;
+let wanderTargetX = 0;
+let wanderTargetY = 0;
+let wanderReturnTimer = 0;
+
+// Saccadi
+let saccadeTimer = 0;
+let saccadeNextAt = 15 + Math.random() * 25;
+let saccadeX = 0, saccadeY = 0;
+let saccadeTargetX = 0, saccadeTargetY = 0;
+
+// Riflessione
+let reflectionTimer = 0;
+let reflectionNextAt = 1500 + Math.random() * 1500;
+let reflectionActive = 0;
+let reflectionPhase = 0;
+let reflectionTotalFrames = 180;
+
+// Respirazione
+let breathPhaseA = 0;
+let breathPhaseB = 0;
+let breathPhaseC = 0;
+let breathCycleTimer = 0;
+let breathCycleDuration = 180 + Math.random() * 120;
+let currentBreathOffset = 0;
+
+// === SPECIFICO ANIME ===
+// Ciuffi di capelli che ondeggiano
+let hairSway = 0;
+let hairSwayTimer = 0;
+
+// Cuori che salgono quando è felice
+let hearts = [];
+
+// Gocce di sudore quando è nervoso/sorpreso
+let sweatDrops = [];
+
+// Stella brillante occasionale
+let sparkles = [];
+
+// Sguardo
+let eyeTargetX = 0, eyeTargetY = 0;
+let eyeCurrentX = 0, eyeCurrentY = 0;
+let mouseIsActive = false;
+let mouseMovedTimer = 0;
+
+// Emozione
+let currentEmotion = { browAngle: 0, browHeight: 0, mouthCurve: 0, eyeOpen: 1, mouthWidth: 80, headTilt: 0 };
+let targetEmotion = { ...currentEmotion };
+
+const EMOTION_KEYWORDS = {
+  felice: ['ciao','benvenuto','grazie','felice','bene','ottimo','grande','bello','amore','contento','evviva','bravo','sorriso','piacere'],
+  triste: ['purtroppo','triste','male','problema','difficile','brutto','dispiace','sofferenza','dolore','solo','perdere'],
+  arrabbiato: ['attenzione','pericolo','errore','grave','rabbia','basta','no','mai','inaccettabile','sbagliato'],
+  sorpreso: ['wow','incredibile','davvero','improvviso','inaspettato','sorpresa','caspita','accidenti','oh']
+};
+let activeEmotion = 'neutro';
+
+// ============================================================
+// WEB AUDIO
+// ============================================================
+let audioCtx = null;
+let ambientOsc = null;
+let ambientGain = null;
+let ambientFilter = null;
+
+function initAudioContext() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch (e) { console.warn('Web Audio non disponibile', e); }
+}
+
+function startAmbient() {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  if (ambientOsc) return;
+  ambientOsc = audioCtx.createOscillator();
+  ambientOsc.type = 'triangle';
+  ambientOsc.frequency.value = 80;
+  ambientGain = audioCtx.createGain();
+  ambientGain.gain.value = 0;
+  ambientGain.gain.linearRampToValueAtTime(AUDIO_CONFIG.ambientVolume, audioCtx.currentTime + 0.4);
+  ambientFilter = audioCtx.createBiquadFilter();
+  ambientFilter.type = 'lowpass';
+  ambientFilter.frequency.value = 250;
+  ambientOsc.connect(ambientFilter);
+  ambientFilter.connect(ambientGain);
+  ambientGain.connect(audioCtx.destination);
+  ambientOsc.start();
+}
+
+function stopAmbient() {
+  if (!ambientOsc) return;
+  const now = audioCtx.currentTime;
+  ambientGain.gain.cancelScheduledValues(now);
+  ambientGain.gain.linearRampToValueAtTime(0, now + 0.3);
+  const osc = ambientOsc;
+  const gain = ambientGain;
+  ambientOsc = null;
+  ambientGain = null;
+  ambientFilter = null;
+  setTimeout(() => {
+    try { osc.stop(); } catch(e){}
+    try { osc.disconnect(); } catch(e){}
+    try { gain.disconnect(); } catch(e){}
+  }, 400);
+}
+
+function playBeep(freq, duration, volume, type) {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type || 'triangle';
+  osc.frequency.value = freq;
+  gain.gain.value = 0;
+  gain.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration + 0.05);
+}
+
+function playSyllableBeep(syllable) {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  // Toni morbidi, in scala pentatonica (più "dolce")
+  let freq = 523;  // DO5
+  if (syllable.includes('a')) freq = 523;
+  else if (syllable.includes('o')) freq = 466;  // LA#4
+  else if (syllable.includes('e')) freq = 587;  // RE5
+  else if (syllable.includes('u')) freq = 392;  // SOL4
+  else if (syllable.includes('i')) freq = 698;  // FA5
+  else freq = 349;  // FA4
+  freq += (Math.random() - 0.5) * 15;
+  playBeep(freq, 0.08, AUDIO_CONFIG.syllableVolume, 'triangle');
+}
+
+function playStartBeep() {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  playBeep(523, 0.10, AUDIO_CONFIG.startBeepVolume, 'triangle');
+  setTimeout(() => playBeep(659, 0.10, AUDIO_CONFIG.startBeepVolume, 'triangle'), 100);
+  setTimeout(() => playBeep(784, 0.14, AUDIO_CONFIG.startBeepVolume, 'triangle'), 200);
+}
+
+function playEndBeep() {
+  if (!audioCtx || !AUDIO_CONFIG.enabled) return;
+  playBeep(784, 0.10, AUDIO_CONFIG.endBeepVolume, 'triangle');
+  setTimeout(() => playBeep(659, 0.10, AUDIO_CONFIG.endBeepVolume, 'triangle'), 100);
+  setTimeout(() => playBeep(523, 0.14, AUDIO_CONFIG.endBeepVolume, 'triangle'), 200);
+}
+
+// ============================================================
+// PARTICELLE (stelline anime)
+// ============================================================
+let particles = [];
+class Particle {
+  constructor() { this.reset(); this.y = Math.random() * canvas.height; }
+  reset() {
+    this.x = Math.random() * canvas.width;
+    this.y = canvas.height + 20;
+    this.sizeBase = Math.random() * 2 + 0.5;
+    this.size = this.sizeBase;
+    this.speedBase = Math.random() * 0.4 + 0.15;
+    this.speed = this.speedBase;
+    this.alphaBase = Math.random() * 0.5 + 0.2;
+    this.alpha = this.alphaBase;
+    this.wobble = Math.random() * Math.PI * 2;
+    this.wobbleSpeed = Math.random() * 0.03 + 0.01;
+    this.rotation = Math.random() * Math.PI * 2;
+    this.isStar = Math.random() < 0.4;
+  }
+  update(intensity) {
+    this.speed = this.speedBase * (1 + intensity * 2);
+    this.size = this.sizeBase * (1 + intensity * 1.3);
+    this.alpha = Math.min(1, this.alphaBase * (1 + intensity * 1.8));
+    this.wobble += this.wobbleSpeed * (1 + intensity * 1.5);
+    this.rotation += 0.02 + intensity * 0.05;
+    this.y -= this.speed;
+    this.x += Math.sin(this.wobble) * (0.4 + intensity * 1.2);
+    if (this.y < -20) this.reset();
+  }
+  draw() {
+    ctx.save();
+    ctx.globalAlpha = this.alpha;
+    ctx.fillStyle = '#ffccff';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = '#ffaaff';
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+    if (this.isStar) {
+      // Stella a 4 punte
+      drawStar(ctx, 0, 0, this.size * 2, this.size * 0.6, 4);
+    } else {
+      // Cerchietto
+      ctx.beginPath();
+      ctx.arc(0, 0, this.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+function drawStar(ctx, cx, cy, outer, inner, points) {
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const radius = i % 2 === 0 ? outer : inner;
+    const angle = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+for (let i = 0; i < 30; i++) particles.push(new Particle());
+
+// ============================================================
+// SILLABE
+// ============================================================
+function getSyllables(text) {
+  const words = text.toLowerCase().match(/[a-zàèéìòù]+/g) || [];
+  const result = [];
+  const vowels = 'aeiouàèéìòù';
+  for (const word of words) {
+    let currentSyl = '';
+    for (let i = 0; i < word.length; i++) {
+      currentSyl += word[i];
+      const isVowel = vowels.includes(word[i]);
+      const nextIsVowel = i + 1 < word.length && vowels.includes(word[i + 1]);
+      if (isVowel && !nextIsVowel) { result.push(currentSyl); currentSyl = ''; }
+    }
+    if (currentSyl) result.push(currentSyl);
+  }
+  return result;
+}
+
+function extractWords(text) {
+  const words = [];
+  const regex = /[a-zA-ZàèéìòùÀÈÉÌÒÙ]+/g;
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    words.push({ word: m[0].toLowerCase(), index: m.index });
+  }
+  return words;
+}
+
+// ============================================================
+// VOCI
+// ============================================================
+let selectedVoice = null;
+function pickItalianVoice() {
+  const voices = speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  let v = voices.find(v => v.lang === 'it-IT' && v.name.toLowerCase().includes('female'));
+  if (!v) v = voices.find(v => v.lang === 'it-IT');
+  if (!v) v = voices.find(v => v.lang && v.lang.startsWith('it'));
+  if (!v) v = voices.find(v => v.lang && v.lang.startsWith('en'));
+  return v || voices[0];
+}
+function loadVoices() {
+  const v = pickItalianVoice();
+  if (v) { selectedVoice = v; console.log('[Avatar] Voce:', v.name, v.lang); }
+}
+if ('speechSynthesis' in window) {
+  speechSynthesis.onvoiceschanged = loadVoices;
+  loadVoices();
+}
+
+// ============================================================
+// EMOZIONI (più marcate in stile anime)
+// ============================================================
+function detectEmotionForWord(word) {
+  for (const [emotion, keywords] of Object.entries(EMOTION_KEYWORDS)) {
+    if (keywords.includes(word)) return emotion;
+  }
+  return null;
+}
+function emotionParams(emotion) {
+  switch (emotion) {
+    case 'felice':    return { browAngle: 0.5, browHeight: -6, mouthCurve: 1.3, eyeOpen: 0.85, mouthWidth: 95, headTilt: 0.03 };
+    case 'triste':    return { browAngle: -0.9, browHeight: 8, mouthCurve: -1.3, eyeOpen: 0.7, mouthWidth: 65, headTilt: -0.06 };
+    case 'arrabbiato':return { browAngle: -1.5, browHeight: 3, mouthCurve: -0.9, eyeOpen: 0.9, mouthWidth: 85, headTilt: 0 };
+    case 'sorpreso':  return { browAngle: 0.8, browHeight: -15, mouthCurve: 0, eyeOpen: 1.6, mouthWidth: 70, headTilt: 0 };
+    default:          return { browAngle: 0, browHeight: 0, mouthCurve: 0, eyeOpen: 1, mouthWidth: 80, headTilt: 0 };
+  }
+}
+
+let wordsInText = [];
+let wordCursor = 0;
+let emotionHoldFrames = 0;
+let lastEmotionTrigger = null;
+
+function processNextWord() {
+  if (wordCursor >= wordsInText.length) return;
+  const w = wordsInText[wordCursor];
+  const detected = detectEmotionForWord(w.word);
+  if (detected) {
+    activeEmotion = detected;
+    emotionHoldFrames = 90;
+    lastEmotionTrigger = detected;
+    // Effetti speciali anime
+    if (detected === 'felice') spawnHearts(5);
+    if (detected === 'sorpreso') spawnSweatDrop();
+    if (detected === 'felice' || detected === 'sorpreso') spawnSparkles(3);
+  }
+  wordCursor++;
+}
+
+// Effetti anime
+function spawnHearts(count) {
+  for (let i = 0; i < count; i++) {
+    hearts.push({
+      x: 260 + (Math.random() - 0.5) * 200,
+      y: 380 + Math.random() * 20,
+      vy: -1.5 - Math.random() * 1,
+      vx: (Math.random() - 0.5) * 1.5,
+      size: 8 + Math.random() * 8,
+      alpha: 1,
+      rotation: (Math.random() - 0.5) * 0.5
+    });
+  }
+}
+function spawnSweatDrop() {
+  sweatDrops.push({
+    x: 380 + Math.random() * 30,
+    y: 180,
+    vy: 0,
+    size: 6 + Math.random() * 4,
+    alpha: 1,
+    phase: 0
+  });
+}
+function spawnSparkles(count) {
+  for (let i = 0; i < count; i++) {
+    sparkles.push({
+      x: 260 + (Math.random() - 0.5) * 250,
+      y: 200 + (Math.random() - 0.5) * 150,
+      size: 4 + Math.random() * 6,
+      alpha: 1,
+      life: 60,
+      rotation: Math.random() * Math.PI
+    });
+  }
+}
+
+// ============================================================
+// BOCCA
+// ============================================================
+let syllables = [];
+let currentSyllableIndex = 0;
+let syllableTimer = 0;
+let framesPerSyllable = 8;
+let lastBeepedSyllable = -1;
+
+function updateMouthAnimation() {
+  if (!isSpeaking) {
+    targetMouthOpen = 0.02 + Math.abs(Math.sin(time * 0.6)) * 0.04;
+    return;
+  }
+  syllableTimer++;
+  if (syllableTimer >= framesPerSyllable) {
+    syllableTimer = 0;
+    currentSyllableIndex++;
+    if (currentSyllableIndex >= syllables.length) currentSyllableIndex = 0;
+    if (currentSyllableIndex !== lastBeepedSyllable) {
+      lastBeepedSyllable = currentSyllableIndex;
+      playSyllableBeep(syllables[currentSyllableIndex] || '');
+    }
+    const syl = syllables[currentSyllableIndex] || '';
+    framesPerSyllable = 6 + Math.random() * 4 + Math.min(4, syl.length);
+  }
+  const syl = syllables[currentSyllableIndex] || '';
+  let openness = 0.4;
+  if (syl.includes('a')) openness = 1.0;
+  else if (syl.includes('o')) openness = 0.85;
+  else if (syl.includes('e')) openness = 0.7;
+  else if (syl.includes('u')) openness = 0.6;
+  else if (syl.includes('i')) openness = 0.45;
+  else openness = 0.25;
+  openness += (Math.random() - 0.5) * 0.15;
+  targetMouthOpen = Math.max(0.05, Math.min(1, openness));
+}
+
+// ============================================================
+// ANIMAZIONI
+// ============================================================
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function updateEmotionAnimation() {
+  if (emotionHoldFrames > 0) {
+    emotionHoldFrames--;
+    if (emotionHoldFrames === 0) activeEmotion = 'neutro';
+  }
+  const params = emotionParams(activeEmotion);
+  Object.keys(params).forEach(k => targetEmotion[k] = params[k]);
+  Object.keys(currentEmotion).forEach(k => {
+    currentEmotion[k] = lerp(currentEmotion[k], targetEmotion[k], 0.12);
+  });
+}
+
+function updateBreath() {
+  breathPhaseA += 0.018;
+  breathPhaseB += 0.037;
+  breathPhaseC += 0.008;
+  currentBreathOffset = Math.sin(breathPhaseA) * 2.5 + Math.sin(breathPhaseB) * 0.8 + Math.sin(breathPhaseC) * 1.2;
+  breathCycleTimer++;
+  if (breathCycleTimer > breathCycleDuration) {
+    breathCycleTimer = 0;
+    breathCycleDuration = 180 + Math.random() * 180;
+  }
+}
+function getBreathOffset() { return currentBreathOffset; }
+
+function updateBlink() {
+  blinkTimer++;
+  if (doubleBlink) {
+    doubleBlinkDelay++;
+    if (doubleBlinkDelay > 15 && doubleBlinkDelay < 22) eyeBlink = 1;
+    else if (doubleBlinkDelay >= 22 && doubleBlinkDelay < 28) eyeBlink = 0;
+    else if (doubleBlinkDelay >= 28 && doubleBlinkDelay < 35) eyeBlink = 1;
+    else if (doubleBlinkDelay >= 35) {
+      eyeBlink = 0; doubleBlink = false; doubleBlinkDelay = 0;
+      nextBlinkAt = blinkTimer + 150 + Math.random() * 200;
+    }
+    return;
+  }
+  if (blinkTimer >= nextBlinkAt) {
+    // Blink progressivo (palpebra che scende)
+    const t = blinkTimer - nextBlinkAt;
+    if (t < 4) eyeBlink = t / 4;
+    else if (t < 7) eyeBlink = 1;
+    else if (t < 11) eyeBlink = 1 - (t - 7) / 4;
+    else {
+      eyeBlink = 0;
+      if (Math.random() < 0.2) { doubleBlink = true; doubleBlinkDelay = 0; }
+      else nextBlinkAt = blinkTimer + 150 + Math.random() * 200;
+    }
+  }
+}
+
+function updateYawn() {
+  if (isSpeaking) { yawnActive = 0; return; }
+  yawnTimer++;
+  if (yawnTimer > yawnCooldown && yawnActive === 0) { yawnActive = 0.01; yawnPhase = 0; }
+  if (yawnActive > 0) {
+    yawnPhase++;
+    const totalFrames = 120;
+    if (yawnPhase < 40) yawnActive = yawnPhase / 40;
+    else if (yawnPhase < 80) yawnActive = 1;
+    else if (yawnPhase < totalFrames) yawnActive = 1 - (yawnPhase - 80) / 40;
+    else { yawnActive = 0; yawnTimer = 0; yawnCooldown = 800 + Math.random() * 800; }
+  }
+}
+
+function updateMouthTwitch() {
+  if (isSpeaking) {
+    mouthTwitchActive = lerp(mouthTwitchActive, 0, 0.15);
+    mouthTwitchTimer = 0;
+    return;
+  }
+  mouthTwitchTimer++;
+  if (mouthTwitchTimer > mouthTwitchNextAt && mouthTwitchActive < 0.01) {
+    mouthTwitchActive = 0.01;
+    mouthTwitchPhase = 0;
+    mouthTwitchDir = Math.random() < 0.5 ? 1 : -1;
+  }
+  if (mouthTwitchActive > 0) {
+    mouthTwitchPhase++;
+    const totalFrames = 45 + Math.random() * 20;
+    if (mouthTwitchPhase < totalFrames * 0.35) {
+      mouthTwitchActive = mouthTwitchPhase / (totalFrames * 0.35);
+    } else if (mouthTwitchPhase < totalFrames * 0.65) {
+      mouthTwitchActive = 1;
+    } else if (mouthTwitchPhase < totalFrames) {
+      mouthTwitchActive = 1 - (mouthTwitchPhase - totalFrames * 0.65) / (totalFrames * 0.35);
+    } else {
+      mouthTwitchActive = 0;
+      mouthTwitchTimer = 0;
+      mouthTwitchNextAt = 180 + Math.random() * 300;
+    }
+  }
+}
+
+function updateBrowTwitch() {
+  if (isSpeaking) {
+    browTwitchActive = lerp(browTwitchActive, 0, 0.15);
+    browTwitchAmount = lerp(browTwitchAmount, 0, 0.1);
+    return;
+  }
+  browTwitchTimer++;
+  if (browTwitchTimer > browTwitchNextAt && browTwitchActive < 0.01) {
+    browTwitchActive = 0.01;
+    browTwitchPhase = 0;
+  }
+  if (browTwitchActive > 0) {
+    browTwitchPhase++;
+    const totalFrames = 40 + Math.random() * 30;
+    if (browTwitchPhase < totalFrames * 0.4) {
+      browTwitchActive = browTwitchPhase / (totalFrames * 0.4);
+    } else if (browTwitchPhase < totalFrames * 0.6) {
+      browTwitchActive = 1;
+    } else if (browTwitchPhase < totalFrames) {
+      browTwitchActive = 1 - (browTwitchPhase - totalFrames * 0.6) / (totalFrames * 0.4);
+    } else {
+      browTwitchActive = 0;
+      browTwitchTimer = 0;
+      browTwitchNextAt = 150 + Math.random() * 250;
+    }
+  }
+  const targetAmount = browTwitchActive * (2 + Math.random() * 2);
+  browTwitchAmount = lerp(browTwitchAmount, targetAmount, 0.15);
+}
+
+function updateHeadDrift() {
+  if (isSpeaking) {
+    headDriftTarget = 0;
+    headDriftCurrent = lerp(headDriftCurrent, 0, 0.08);
+    return;
+  }
+  headDriftTimer++;
+  if (headDriftTimer > headDriftNextAt) {
+    headDriftTarget = (Math.random() - 0.5) * 0.06;
+    headDriftTimer = 0;
+    headDriftNextAt = 120 + Math.random() * 200;
+  }
+  headDriftCurrent = lerp(headDriftCurrent, headDriftTarget, 0.02);
+}
+
+function updatePupilDilation() {
+  pupilTimer++;
+  if (pupilTimer > pupilNextAt) {
+    pupilScaleTarget = 0.9 + Math.random() * 0.2;
+    pupilTimer = 0;
+    pupilNextAt = 120 + Math.random() * 240;
+  }
+  pupilScale = lerp(pupilScale, pupilScaleTarget, 0.02);
+}
+
+function updateWander() {
+  if (isSpeaking) { wanderActive = false; return; }
+  if (mouseIsActive) { wanderActive = false; return; }
+  wanderTimer++;
+  if (wanderTimer > wanderNextAt) {
+    wanderTargetX = (Math.random() - 0.5) * 10;
+    wanderTargetY = (Math.random() - 0.5) * 6;
+    wanderTimer = 0;
+    wanderNextAt = 90 + Math.random() * 180;
+    wanderActive = true;
+    wanderReturnTimer = 0;
+  }
+  if (wanderActive) {
+    wanderReturnTimer++;
+    if (wanderReturnTimer > 120) {
+      wanderTargetX = 0; wanderTargetY = 0;
+      wanderActive = false;
+    }
+  }
+}
+
+function updateSaccades() {
+  if (isSpeaking) {
+    saccadeX = lerp(saccadeX, 0, 0.2);
+    saccadeY = lerp(saccadeY, 0, 0.2);
+    return;
+  }
+  saccadeTimer++;
+  if (saccadeTimer > saccadeNextAt) {
+    saccadeTargetX = (Math.random() - 0.5) * 2;
+    saccadeTargetY = (Math.random() - 0.5) * 1.5;
+    saccadeTimer = 0;
+    saccadeNextAt = 15 + Math.random() * 25;
+  }
+  saccadeX = lerp(saccadeX, saccadeTargetX, 0.4);
+  saccadeY = lerp(saccadeY, saccadeTargetY, 0.4);
+}
+
+function updateReflection() {
+  if (isSpeaking) { reflectionActive = 0; reflectionTimer = 0; return; }
+  reflectionTimer++;
+  if (reflectionTimer > reflectionNextAt && reflectionActive === 0) {
+    reflectionActive = 0.01;
+    reflectionPhase = 0;
+  }
+  if (reflectionActive > 0) {
+    reflectionPhase++;
+    const totalFrames = reflectionTotalFrames;
+    if (reflectionPhase < totalFrames * 0.2) {
+      reflectionActive = reflectionPhase / (totalFrames * 0.2);
+    } else if (reflectionPhase < totalFrames * 0.7) {
+      reflectionActive = 1;
+    } else if (reflectionPhase < totalFrames) {
+      reflectionActive = 1 - (reflectionPhase - totalFrames * 0.7) / (totalFrames * 0.3);
+    } else {
+      reflectionActive = 0;
+      reflectionTimer = 0;
+      reflectionNextAt = 1500 + Math.random() * 1500;
+    }
+  }
+}
+
+document.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const ccx = rect.left + rect.width / 2;
+  const ccy = rect.top + rect.height / 2;
+  const dx = e.clientX - ccx, dy = e.clientY - ccy;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const maxOffset = 7;
+  if (dist > 0) {
+    const factor = Math.min(1, dist / 400);
+    eyeTargetX = (dx / dist) * maxOffset * factor;
+    eyeTargetY = (dy / dist) * maxOffset * factor;
+  }
+  mouseIsActive = true;
+  mouseMovedTimer = 0;
+});
+
+function updateGaze() {
+  mouseMovedTimer++;
+  if (mouseMovedTimer > 180) mouseIsActive = false;
+  if (isSpeaking) {
+    eyeTargetX = Math.sin(time * 0.5) * 1.5;
+    eyeTargetY = Math.sin(time * 0.7) * 1.0;
+  } else if (mouseIsActive) {
+    // già aggiornato
+  } else if (wanderActive) {
+    eyeTargetX = wanderTargetX;
+    eyeTargetY = wanderTargetY;
+  } else {
+    eyeTargetX = lerp(eyeTargetX, 0, 0.03);
+    eyeTargetY = lerp(eyeTargetY, 0, 0.03);
+  }
+  eyeCurrentX = lerp(eyeCurrentX, eyeTargetX, 0.08);
+  eyeCurrentY = lerp(eyeCurrentY, eyeTargetY, 0.08);
+}
+
+// === ANIME SPECIFIC ===
+function updateHairSway() {
+  hairSwayTimer++;
+  // Ciuffi che ondeggiano dolcemente
+  hairSway = Math.sin(hairSwayTimer * 0.03) * 0.08 + Math.sin(hairSwayTimer * 0.05) * 0.04;
+}
+
+function updateHearts() {
+  for (let i = hearts.length - 1; i >= 0; i--) {
+    const h = hearts[i];
+    h.y += h.vy;
+    h.x += h.vx;
+    h.alpha -= 0.012;
+    h.size *= 0.995;
+    if (h.alpha <= 0) hearts.splice(i, 1);
+  }
+}
+
+function updateSweatDrops() {
+  for (let i = sweatDrops.length - 1; i >= 0; i--) {
+    const s = sweatDrops[i];
+    s.phase++;
+    s.vy += 0.15;
+    s.y += s.vy;
+    if (s.phase > 40) s.alpha -= 0.03;
+    if (s.alpha <= 0 || s.y > canvas.height) sweatDrops.splice(i, 1);
+  }
+}
+
+function updateSparkles() {
+  for (let i = sparkles.length - 1; i >= 0; i--) {
+    const s = sparkles[i];
+    s.life--;
+    s.alpha -= 0.02;
+    s.rotation += 0.1;
+    if (s.alpha <= 0 || s.life <= 0) sparkles.splice(i, 1);
+  }
+}
+
+// ============================================================
+// DISEGNO
+// ============================================================
+function drawAvatar() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  time += 0.02;
+
+  updateMouthAnimation();
+  updateEmotionAnimation();
+  updateBreath();
+  updateBlink();
+  updateYawn();
+  updateMouthTwitch();
+  updateBrowTwitch();
+  updateHeadDrift();
+  updatePupilDilation();
+  updateWander();
+  updateSaccades();
+  updateReflection();
+  updateGaze();
+  updateHairSway();
+  updateHearts();
+  updateSweatDrops();
+  updateSparkles();
+
+  const baseIntensity = 0.15;
+  const speakIntensity = isSpeaking ? Math.min(1, 0.3 + mouthOpen * 0.7) : 0;
+  const intensity = Math.max(baseIntensity, speakIntensity);
+  particles.forEach(p => { p.update(intensity); p.draw(); });
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2 + getBreathOffset();
+
+  // Head tilt + drift su tutto il viso
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(currentEmotion.headTilt + headDriftCurrent);
+  ctx.translate(-cx, -cy);
+
+  // 1. CAPELLI (dietro)
+  drawHairBack(cx, cy);
+
+  // 2. TESTA (viso)
+  drawHead(cx, cy);
+
+  // 3. CAPELLI (davanti)
+  drawHairFront(cx, cy);
+
+  // 4. SOPRACCIGLIA
+  const reflectionOffsetY = reflectionActive * -4;
+  const eyeY = cy - 20 + reflectionOffsetY;
+  const eyeOffsetX = 55;
+  const reflectionBrowOffset = reflectionActive * 2;
+
+  drawEyebrow(cx - eyeOffsetX, eyeY - 50 - reflectionBrowOffset, 1);
+  drawEyebrow(cx + eyeOffsetX, eyeY - 50 - reflectionBrowOffset, -1);
+
+  // 5. OCCHI (grandi, anime)
+  const baseEyeRadius = 26;
+  const reflectionEyeFactor = 1 - reflectionActive * 0.2;
+  const eyeRadius = baseEyeRadius * currentEmotion.eyeOpen * reflectionEyeFactor;
+
+  drawEyeAnime(cx - eyeOffsetX, eyeY, eyeRadius, 1);  // sinistro
+  drawEyeAnime(cx + eyeOffsetX, eyeY, eyeRadius, -1); // destro
+
+  // 6. BLUSH (guance)
+  drawBlush(cx, cy, eyeY);
+
+  // 7. NASO (piccolo puntino)
+  ctx.save();
+  ctx.fillStyle = COLOR_SKIN_SHADOW;
+  ctx.globalAlpha = 0.6;
+  ctx.beginPath();
+  ctx.arc(cx + 2, eyeY + 30, 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 8. BOCCA (espressiva)
+  drawMouthAnime(cx, cy + 65);
+
+  // 9. Effetti sopra (cuori, sudore, stelle)
+  drawSparkles();
+  drawHearts();
+  drawSweatDrops();
+
+  ctx.restore();
+}
+
+// === CAPELLI ===
+function drawHairBack(cx, cy) {
+  ctx.save();
+  ctx.fillStyle = COLOR_HAIR;
+  ctx.strokeStyle = COLOR_OUTLINE;
+  ctx.lineWidth = 2;
+
+  // Capelli dietro (silhouette grande)
+  ctx.beginPath();
+  ctx.arc(cx, cy - 40, 155, Math.PI * 0.05, Math.PI * 0.95, false);
+  ctx.arc(cx, cy - 40, 155, Math.PI * 0.05, Math.PI * 0.95, true);
+  ctx.closePath();
+  ctx.fill();
+
+  // Capelli lunghi dietro (cadono)
+  ctx.beginPath();
+  ctx.moveTo(cx - 155, cy - 40);
+  ctx.quadraticCurveTo(cx - 180, cy + 100, cx - 160, cy + 180);
+  ctx.lineTo(cx + 160, cy + 180);
+  ctx.quadraticCurveTo(cx + 180, cy + 100, cx + 155, cy - 40);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawHairFront(cx, cy) {
+  ctx.save();
+  ctx.fillStyle = COLOR_HAIR;
+  ctx.strokeStyle = COLOR_OUTLINE;
+  ctx.lineWidth = 2;
+
+  const sway = hairSway * 15;
+
+  // Ciuffo centrale
+  ctx.beginPath();
+  ctx.moveTo(cx - 60, cy - 130);
+  ctx.quadraticCurveTo(cx - 40 + sway, cy - 190, cx + 20, cy - 175);
+  ctx.quadraticCurveTo(cx + 30, cy - 150, cx + 10, cy - 110);
+  ctx.quadraticCurveTo(cx - 30, cy - 130, cx - 60, cy - 130);
+  ctx.closePath();
+  ctx.fill();
+
+  // Ciuffo laterale destro
+  ctx.beginPath();
+  ctx.moveTo(cx + 40, cy - 140);
+  ctx.quadraticCurveTo(cx + 110 + sway * 0.5, cy - 170, cx + 130, cy - 90);
+  ctx.quadraticCurveTo(cx + 90, cy - 100, cx + 60, cy - 90);
+  ctx.quadraticCurveTo(cx + 50, cy - 110, cx + 40, cy - 140);
+  ctx.closePath();
+  ctx.fill();
+
+  // Ciuffo laterale sinistro
+  ctx.beginPath();
+  ctx.moveTo(cx - 40, cy - 140);
+  ctx.quadraticCurveTo(cx - 110 - sway * 0.5, cy - 170, cx - 130, cy - 90);
+  ctx.quadraticCurveTo(cx - 90, cy - 100, cx - 60, cy - 90);
+  ctx.quadraticCurveTo(cx - 50, cy - 110, cx - 40, cy - 140);
+  ctx.closePath();
+  ctx.fill();
+
+  // Highlight sui capelli (riflesso)
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = COLOR_HAIR_LIGHT;
+  ctx.beginPath();
+  ctx.ellipse(cx - 30, cy - 150, 25, 8, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx + 20, cy - 155, 18, 6, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// === TESTA ===
+function drawHead(cx, cy) {
+  ctx.save();
+
+  // Viso: forma ovale tipica anime (più largo in alto, appuntito in basso)
+  ctx.fillStyle = COLOR_SKIN;
+  ctx.strokeStyle = COLOR_OUTLINE;
+  ctx.lineWidth = 2.5;
+
+  ctx.beginPath();
+  // Fronte
+  ctx.moveTo(cx - 100, cy - 80);
+  ctx.quadraticCurveTo(cx - 110, cy - 30, cx - 105, cy + 20);
+  // Guancia sinistra
+  ctx.quadraticCurveTo(cx - 100, cy + 60, cx - 70, cy + 90);
+  // Mento (appuntito)
+  ctx.quadraticCurveTo(cx, cy + 125, cx + 70, cy + 90);
+  // Guancia destra
+  ctx.quadraticCurveTo(cx + 100, cy + 60, cx + 105, cy + 20);
+  ctx.quadraticCurveTo(cx + 110, cy - 30, cx + 100, cy - 80);
+  // Fronte superiore
+  ctx.quadraticCurveTo(cx, cy - 110, cx - 100, cy - 80);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Ombra guancia destra
+  ctx.fillStyle = COLOR_SKIN_SHADOW;
+  ctx.globalAlpha = 0.2;
+  ctx.beginPath();
+  ctx.ellipse(cx + 75, cy + 30, 20, 30, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// === OCCHIO ANIME ===
+function drawEyeAnime(x, y, radius, side) {
+  ctx.save();
+
+  // Base occhio: forma a goccia / ovale allungato
+  const eyeW = radius * 0.9;
+  const eyeH = radius * 1.1;
+
+  if (eyeBlink > 0.8) {
+    // Occhio chiuso: linea curva verso il basso (∪)
+    ctx.strokeStyle = COLOR_OUTLINE;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x - eyeW, y + 2);
+    ctx.quadraticCurveTo(x, y + eyeH * 0.4, x + eyeW, y + 2);
+    ctx.stroke();
+
+    ctx.restore();
+    return;
+  }
+
+  // Occhio aperto
+  // 1. Bianco dell'occhio (sclera)
+  ctx.fillStyle = COLOR_EYE_WHITE;
+  ctx.beginPath();
+  ctx.ellipse(x, y, eyeW, eyeH, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 2. Iride (cerchio colorato)
+  const pupilX = x + eyeCurrentX + saccadeX + Math.sin(time * 0.7) * 1.2;
+  const pupilY = y + eyeCurrentY + saccadeY + Math.sin(time * 1.1) * 1.2;
+  const irisRadius = radius * 0.65 * pupilScale;
+
+  const grad = ctx.createRadialGradient(pupilX, pupilY - irisRadius * 0.3, 0, pupilX, pupilY, irisRadius);
+  grad.addColorStop(0, COLOR_EYE_IRIS_1);
+  grad.addColorStop(1, COLOR_EYE_IRIS_2);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(pupilX, pupilY, irisRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 3. Pupilla
+  ctx.fillStyle = COLOR_EYE_PUPIL;
+  ctx.beginPath();
+  ctx.arc(pupilX, pupilY, irisRadius * 0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 4. Riflessi (2 puntini bianchi)
+  ctx.fillStyle = COLOR_EYE_REFLECTION;
+  ctx.beginPath();
+  ctx.arc(pupilX - irisRadius * 0.35, pupilY - irisRadius * 0.4, irisRadius * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(pupilX + irisRadius * 0.3, pupilY + irisRadius * 0.3, irisRadius * 0.15, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 5. Contorno superiore (ciglia spesse - stile anime)
+  ctx.strokeStyle = COLOR_OUTLINE;
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.ellipse(x, y, eyeW, eyeH, 0, Math.PI * 1.05, Math.PI * 1.95);
+  ctx.stroke();
+
+  // 6. Contorno inferiore sottile
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.ellipse(x, y, eyeW, eyeH, 0, Math.PI * 0.05, Math.PI * 0.95);
+  ctx.stroke();
+
+  // 7. Ciglia laterali (in stile anime, sulla parte esterna)
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  const cigliaX = x + side * eyeW;
+  ctx.moveTo(cigliaX, y - eyeH * 0.3);
+  ctx.lineTo(cigliaX + side * 8, y - eyeH * 0.6);
+  ctx.stroke();
+
+  // 8. Palpebra durante il blink (overlay che copre dall'alto)
+  if (eyeBlink > 0 && eyeBlink <= 0.8) {
+    ctx.fillStyle = COLOR_SKIN;
+    ctx.beginPath();
+    ctx.ellipse(x, y - eyeH + eyeH * 2 * eyeBlink, eyeW * 1.05, eyeH, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// === SOPRACCIGLIA ===
+function drawEyebrow(x, y, side) {
+  const w = 32;
+  const angle = currentEmotion.browAngle * 0.35;
+  const offsetY = currentEmotion.browHeight - browTwitchAmount;
+  const reflectAngle = reflectionActive * -0.15 * side;
+  const finalAngle = angle + reflectAngle;
+
+  ctx.save();
+  ctx.strokeStyle = COLOR_BROW;
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = 'round';
+
+  const innerX = x - side * w / 2;
+  const outerX = x + side * w / 2;
+  const innerY = y + offsetY + finalAngle * w * 0.5;
+  const outerY = y + offsetY - finalAngle * w * 0.5;
+
+  ctx.beginPath();
+  ctx.moveTo(innerX, innerY);
+  ctx.quadraticCurveTo(x, y + offsetY - 2, outerX, outerY);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// === BLUSH ===
+function drawBlush(cx, cy, eyeY) {
+  // Visibile quando è felice o in imbarazzo
+  const intensity = (activeEmotion === 'felice' ? 1 : 0) + 
+                    (activeEmotion === 'sorpreso' ? 0.7 : 0);
+  if (intensity < 0.1) return;
+
+  ctx.save();
+  ctx.globalAlpha = intensity * 0.6;
+
+  // Pallini sulle guance (stile anime)
+  for (const side of [-1, 1]) {
+    const bx = cx + side * 75;
+    const by = eyeY + 25;
+
+    // Base blush
+    const grad = ctx.createRadialGradient(bx, by, 0, bx, by, 25);
+    grad.addColorStop(0, 'rgba(255,150,180,0.7)');
+    grad.addColorStop(1, 'rgba(255,150,180,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(bx, by, 25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Linee diagonali (stile manga)
+    ctx.strokeStyle = 'rgba(255,100,150,0.6)';
+    ctx.lineWidth = 2;
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(bx + i * 6 - 4, by + 6);
+      ctx.lineTo(bx + i * 6 + 4, by - 6);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// === BOCCA ===
+function drawMouthAnime(x, y) {
+  ctx.save();
+
+  const yawnOpen = yawnActive * 0.9;
+  const combinedOpen = Math.max(mouthOpen, yawnOpen);
+  const mouthWidth = currentEmotion.mouthWidth * 0.8;
+  const maxOpenHeight = 45;
+  const openHeight = maxOpenHeight * combinedOpen;
+  const reflectionCurve = reflectionActive * -0.4;
+
+  if (openHeight > 6) {
+    // Bocca aperta
+    const twitchOffsetY = mouthTwitchActive * mouthTwitchDir * 1.2;
+
+    // Interno bocca (scuro)
+    ctx.fillStyle = COLOR_MOUTH_INNER;
+    ctx.beginPath();
+    ctx.ellipse(x, y + twitchOffsetY, mouthWidth / 2, openHeight / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Lingua (in basso)
+    ctx.fillStyle = '#ff7a9a';
+    ctx.beginPath();
+    ctx.ellipse(x, y + twitchOffsetY + openHeight * 0.2, mouthWidth * 0.35, openHeight * 0.3, 0, 0, Math.PI);
+    ctx.fill();
+
+    // Contorno
+    ctx.strokeStyle = COLOR_OUTLINE;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(x, y + twitchOffsetY, mouthWidth / 2, openHeight / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Denti superiori (piccola linea bianca) se aperta molto
+    if (combinedOpen > 0.5) {
+      ctx.fillStyle = COLOR_EYE_WHITE;
+      ctx.beginPath();
+      ctx.ellipse(x, y + twitchOffsetY - openHeight * 0.3, mouthWidth * 0.4, openHeight * 0.15, 0, 0, Math.PI);
+      ctx.fill();
+    }
+  } else {
+    // Bocca chiusa
+    const curve = currentEmotion.mouthCurve + reflectionCurve;
+    const twitchCurve = mouthTwitchActive * mouthTwitchDir * 0.6;
+    const totalCurve = curve + twitchCurve;
+    const halfW = mouthWidth / 2;
+    const controlY = y + totalCurve * 14;
+
+    // Linea bocca
+    ctx.strokeStyle = COLOR_OUTLINE;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x - halfW, y);
+    ctx.quadraticCurveTo(x, controlY, x + halfW, y);
+    ctx.stroke();
+
+    // Piccolo accenno di labbra se sorride
+    if (totalCurve > 0.3) {
+      ctx.strokeStyle = COLOR_LIP;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x - halfW * 0.6, y + 1);
+      ctx.quadraticCurveTo(x, controlY + 2, x + halfW * 0.6, y + 1);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// === EFFETTI ANIME ===
+function drawHearts() {
+  hearts.forEach(h => {
+    ctx.save();
+    ctx.globalAlpha = h.alpha;
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.rotation);
+    ctx.fillStyle = '#ff6b9d';
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#ff99cc';
+    // Cuore
+    ctx.beginPath();
+    const s = h.size;
+    ctx.moveTo(0, s * 0.3);
+    ctx.bezierCurveTo(-s, -s * 0.3, -s * 0.5, -s, 0, -s * 0.5);
+    ctx.bezierCurveTo(s * 0.5, -s, s, -s * 0.3, 0, s * 0.3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+function drawSweatDrops() {
+  sweatDrops.forEach(s => {
+    ctx.save();
+    ctx.globalAlpha = s.alpha;
+    ctx.translate(s.x, s.y);
+    // Goccia
+    ctx.fillStyle = '#88ddff';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = '#88ddff';
+    ctx.beginPath();
+    ctx.moveTo(0, -s.size);
+    ctx.quadraticCurveTo(s.size, 0, 0, s.size);
+    ctx.quadraticCurveTo(-s.size, 0, 0, -s.size);
+    ctx.closePath();
+    ctx.fill();
+    // Highlight bianco
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = s.alpha * 0.7;
+    ctx.beginPath();
+    ctx.arc(-s.size * 0.3, -s.size * 0.3, s.size * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+function drawSparkles() {
+  sparkles.forEach(s => {
+    ctx.save();
+    ctx.globalAlpha = s.alpha;
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.rotation);
+    ctx.fillStyle = '#fff8cc';
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = '#ffee99';
+    drawStar(ctx, 0, 0, s.size, s.size * 0.3, 4);
+    ctx.restore();
+  });
+}
+
+// ============================================================
+// LOOP
+// ============================================================
+function renderLoop() {
+  drawAvatar();
+  requestAnimationFrame(renderLoop);
+}
+
+// ============================================================
+// SINTESI VOCALE + TOGGLE
+// ============================================================
+let utterance = null;
+let fallbackWordInterval = null;
+
+function updateStatus(text, cls) {
+  statusEl.innerText = text;
+  statusEl.classList.remove('speaking', 'done');
+  if (cls) statusEl.classList.add(cls);
+}
+
+function speak() {
+  if (!('speechSynthesis' in window)) {
+    updateStatus('sintesi vocale non supportata');
+    return;
+  }
+  window.speechSynthesis.cancel();
+  if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+
+  initAudioContext();
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+  syllables = getSyllables(TESTO);
+  wordsInText = extractWords(TESTO);
+  currentSyllableIndex = 0;
+  syllableTimer = 0;
+  framesPerSyllable = 8;
+  wordCursor = 0;
+  activeEmotion = 'neutro';
+  emotionHoldFrames = 0;
+  lastBeepedSyllable = -1;
+
+  utterance = new SpeechSynthesisUtterance(TESTO);
+  utterance.lang = 'it-IT';
+  utterance.rate = 0.95;
+  utterance.pitch = 1.3;   // pitch più alto per una voce più "kawaii"
+  utterance.volume = 1;
+  if (selectedVoice) utterance.voice = selectedVoice;
+
+  utterance.onstart = () => {
+    isSpeaking = true;
+    container.classList.add('speaking');
+    updateStatus('clicca per fermare', 'speaking');
+    playStartBeep();
+    startAmbient();
+  };
+
+  utterance.onboundary = (e) => {
+    if (e.name === 'word') processNextWord();
+  };
+
+  utterance.onend = () => {
+    isSpeaking = false;
+    targetMouthOpen = 0;
+    activeEmotion = 'neutro';
+    emotionHoldFrames = 0;
+    container.classList.remove('speaking');
+    updateStatus('fine — clicca per riascoltare', 'done');
+    playEndBeep();
+    stopAmbient();
+    if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+  };
+
+  utterance.onerror = (e) => {
+    console.error(e);
+    isSpeaking = false;
+    targetMouthOpen = 0;
+    activeEmotion = 'neutro';
+    emotionHoldFrames = 0;
+    container.classList.remove('speaking');
+    updateStatus('errore — clicca per riprovare', 'done');
+    stopAmbient();
+    if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+  };
+
+  fallbackWordInterval = setInterval(() => {
+    if (!isSpeaking) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; return; }
+    processNextWord();
+  }, 350);
+
+  speechSynthesis.speak(utterance);
+}
+
+function stopSpeaking() {
+  speechSynthesis.cancel();
+  if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
+  isSpeaking = false;
+  targetMouthOpen = 0;
+  activeEmotion = 'neutro';
+  emotionHoldFrames = 0;
+  container.classList.remove('speaking');
+  updateStatus('clicca o premi un tasto');
+  stopAmbient();
+}
+
+function toggleSpeech() {
+  if (isSpeaking) stopSpeaking();
+  else speak();
+}
+
+document.body.addEventListener('click', toggleSpeech);
+document.body.addEventListener('touchstart', function(e) {
+  e.preventDefault();
+  toggleSpeech();
+}, { passive: false });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault();
+    toggleSpeech();
+  } else if (e.key === 'Escape') {
+    if (isSpeaking) stopSpeaking();
+  }
+});
+
+// ============================================================
+// AVVIO
+// ============================================================
+renderLoop();
+</script>
+</body>
+</html>
