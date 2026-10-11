@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -24,7 +24,6 @@
   body.sleeping { background-color: #000d06; }
   body.offended { background-color: #1a0a0a; }
 
-  /* Wrapper interno: applichiamo qui il brightness per non rompere il fixed dell'overlay CRT */
   #app {
     width: 100%; height: 100%;
     display: flex; flex-direction: column;
@@ -49,33 +48,34 @@
 
   .avatar-container {
     position: relative;
-    /* La dimensione è controllata via JS con --size */
-    width: var(--size, 500px);
-    height: var(--size, 500px);
+    width: var(--size, 700px);
+    height: var(--size, 700px);
     display: flex; justify-content: center; align-items: center;
-    border: 2px solid #00ff88; border-radius: 50%;
-    box-shadow: 0 0 40px rgba(0,255,136,0.4), inset 0 0 60px rgba(0,255,136,0.15);
-    background: radial-gradient(circle, rgba(0,40,20,0.5) 0%, rgba(0,10,5,0.9) 100%);
+    border: 1px solid rgba(0,255,157,0.32); border-radius: 28px; overflow: hidden;
+    box-shadow: 0 0 42px rgba(0,255,157,0.10), inset 0 0 60px rgba(0,255,157,0.05);
+    background: radial-gradient(circle at 50% 46%, rgba(0,255,157,0.12), rgba(0,0,0,0.14) 60%), rgba(0,0,0,0.20);
     transition: box-shadow 0.5s ease, border-color 0.5s ease;
     flex-shrink: 0;
     pointer-events: none;
   }
   .avatar-container.speaking {
-    box-shadow: 0 0 80px rgba(0,255,136,0.8), inset 0 0 100px rgba(0,255,136,0.3);
+    box-shadow: 0 0 72px rgba(0,255,157,0.28), inset 0 0 90px rgba(0,255,157,0.12);
   }
   .avatar-container.sleeping {
-    box-shadow: 0 0 20px rgba(0,255,136,0.2), inset 0 0 40px rgba(0,255,136,0.08);
-    border-color: #005533;
+    box-shadow: 0 0 24px rgba(0,255,157,0.08), inset 0 0 40px rgba(0,255,157,0.035);
+    border-color: rgba(0,85,51,0.8);
   }
   .avatar-container.offended {
-    box-shadow: 0 0 60px rgba(255,120,120,0.6), inset 0 0 80px rgba(255,80,80,0.2);
-    border-color: #ff8888;
+    box-shadow: 0 0 60px rgba(255,120,120,0.25), inset 0 0 80px rgba(255,80,80,0.08);
+    border-color: rgba(255,136,136,0.75);
   }
   canvas {
     display: block;
-    border-radius: 50%;
+    border-radius: 27px;
     width: 100%;
     height: 100%;
+    cursor: pointer;
+    touch-action: manipulation;
   }
 
   .status {
@@ -114,30 +114,40 @@
     text-shadow: 0 0 10px #ff4444;
   }
 
-  /* Mobile molto piccolo: nascondi overlay più invasivo e riduci spacing */
   @media (max-height: 500px) {
     .status { bottom: 2vh; letter-spacing: 2px; }
+    .avatar-container { border-radius: 22px; }
+    canvas { border-radius: 21px; }
   }
 </style>
 </head>
 <body>
 <div id="app">
   <div class="avatar-container" id="avatarContainer">
-    <canvas id="avatarCanvas" width="500" height="500"></canvas>
+    <canvas id="avatarCanvas" width="420" height="420" aria-label="Interactive neon avatar. Click to talk."></canvas>
   </div>
 </div>
 <div class="crt-overlay"></div>
 
-<div class="status" id="status">▶ clicca o premi un tasto per iniziare</div>
+<div class="status" id="status">▶ click or press a key to start</div>
+
+<!-- Carica il testo da talk.js (deve essere nella stessa cartella) -->
+<script src="talk.js"></script>
 
 <script>
 // ============================================================
-// TESTO DA PRONUNCIARE
+// TEXT TO BE SPOKEN — loaded from talk.js
 // ============================================================
-const TESTO = "Ciao e benvenuto! Questo è un testo di prova per il mio avatar. Purtroppo a volte ci sono piccoli problemi, ma nessun errore grave. Attenzione però: il testo verrà letto utilizzando la sintesi vocale del browser. Wow, incredibile, vediamo se tutto funziona correttamente. Grazie e arrivederci!";
+const TESTO = (() => {
+  if (window.TALK_LINES && Array.isArray(window.TALK_LINES) && window.TALK_LINES.length) {
+    return window.TALK_LINES.join(' ').replace(/\s+/g, ' ').trim();
+  }
+  console.warn('⚠ talk.js mancante o malformato — uso fallback.');
+  return "Ciao! Non ho trovato il file talk.js, quindi leggo questo messaggio di riserva.";
+})();
 
 // ============================================================
-// CONFIGURAZIONE STATI D'ANIMO
+// MOOD CONFIGURATION
 // ============================================================
 const MOOD_CONFIG = {
   sleepAfterMs: 5 * 60 * 1000,
@@ -172,30 +182,23 @@ const container = document.getElementById('avatarContainer');
 // ============================================================
 // RESPONSIVE
 // ============================================================
-// Il canvas ha risoluzione logica 500x500 (coordinate interne invariate).
-// Ridimensioniamo via CSS in base allo spazio disponibile.
-// Aggiorniamo il backing store solo quando serve (devicePixelRatio).
-const LOGICAL_SIZE = 500;
+const LOGICAL_SIZE = 420;
 
 function fitAvatar() {
-  // Dimensioni disponibili: teniamo un margine per status bar in basso e bordi
-  const availableW = window.innerWidth * 0.92;
-  const availableH = window.innerHeight * 0.78;
-  const sizeCss = Math.max(160, Math.min(availableW, availableH, 560));
+  const availableW = window.innerWidth * 0.96;
+  const availableH = window.innerHeight * 0.76;
+  const sizeCss = Math.max(160, Math.min(availableW, availableH, 700));
 
   document.documentElement.style.setProperty('--size', sizeCss + 'px');
 
-  // Backing store in pixel reali per nitidezza su retina
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const needed = Math.round(sizeCss * dpr);
 
-  // Se cambia il backing store, aggiorna
   if (canvas.width !== needed || canvas.height !== needed) {
     canvas.width = needed;
     canvas.height = needed;
   }
 
-  // Scala il contesto: tutto il codice di disegno continua a usare coordinate 500x500
   const scale = canvas.width / LOGICAL_SIZE;
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 }
@@ -205,14 +208,13 @@ window.addEventListener('orientationchange', () => setTimeout(fitAvatar, 100));
 fitAvatar();
 
 // ============================================================
-// STATO GENERALE
+// GENERAL STATE
 // ============================================================
 let isSpeaking = false;
 let mouthOpen = 0;
 let targetMouthOpen = 0;
 let time = 0;
 
-// === STATI D'ANIMO ===
 let currentMood = 'awake';
 let lastInteractionTime = Date.now();
 let moodStartTime = 0;
@@ -220,62 +222,53 @@ let tiredness = 0;
 let clickTargetX = 0;
 let clickTargetY = 0;
 
-// Z del sonno
 let sleepZs = [];
 let zSpawnTimer = 0;
 
 // ============================================================
-// BLINK — macchina a stati
-// Fasi: 'idle' -> 'closing' -> 'opening' -> (eventuale 'double-wait' -> 'closing' -> 'opening') -> 'idle'
+// BLINK — state machine
 // ============================================================
-let eyeBlink = 0;              // 0 = aperto, 1 = chiuso (livello interpolato)
+let eyeBlink = 0;
 let blinkPhase = 'idle';
 let blinkPhaseTimer = 0;
-let blinkCloseDuration = 4;    // frame per chiudere
-let blinkOpenDuration = 4;     // frame per riaprire
+let blinkCloseDuration = 4;
+let blinkOpenDuration = 4;
 let blinkPauseMin = 150;
 let blinkPauseMax = 350;
-let blinkNextDelay = 0;        // timer per il prossimo blink
-let blinkWantsDouble = false;  // se il prossimo blink deve essere doppio
-let blinkDoubleGap = 0;        // timer fra i due blink del doppio
+let blinkNextDelay = 0;
+let blinkWantsDouble = false;
+let blinkDoubleGap = 0;
 let blinkDoubleGapDuration = 8;
 
-// Blink forzato (risveglio): quanti blink ravvicinati restano
 let forcedBlinkQueue = 0;
 
-// Sbadiglio
 let yawnTimer = 0;
 let yawnCooldown = 800 + Math.random() * 800;
 let yawnActive = 0;
 let yawnPhase = 0;
 
-// Micro-smorfie bocca
 let mouthTwitchTimer = 0;
 let mouthTwitchNextAt = 120 + Math.random() * 180;
 let mouthTwitchActive = 0;
 let mouthTwitchPhase = 0;
 let mouthTwitchDir = 1;
 
-// Micro-movimenti sopracciglia
 let browTwitchTimer = 0;
 let browTwitchNextAt = 100 + Math.random() * 200;
 let browTwitchActive = 0;
 let browTwitchPhase = 0;
 let browTwitchAmount = 0;
 
-// Micro-drift capo
 let headDriftTimer = 0;
 let headDriftNextAt = 90 + Math.random() * 150;
 let headDriftTarget = 0;
 let headDriftCurrent = 0;
 
-// Dilatazione pupille
 let pupilScale = 1;
 let pupilScaleTarget = 1;
 let pupilTimer = 0;
 let pupilNextAt = 180 + Math.random() * 240;
 
-// Wander
 let wanderActive = false;
 let wanderTimer = 0;
 let wanderNextAt = 120 + Math.random() * 180;
@@ -283,20 +276,17 @@ let wanderTargetX = 0;
 let wanderTargetY = 0;
 let wanderReturnTimer = 0;
 
-// Saccadi
 let saccadeTimer = 0;
 let saccadeNextAt = 15 + Math.random() * 25;
 let saccadeX = 0, saccadeY = 0;
 let saccadeTargetX = 0, saccadeTargetY = 0;
 
-// Riflessione
 let reflectionTimer = 0;
 let reflectionNextAt = 1500 + Math.random() * 1500;
 let reflectionActive = 0;
 let reflectionPhase = 0;
 let reflectionTotalFrames = 180;
 
-// Respirazione
 let breathPhaseA = 0;
 let breathPhaseB = 0;
 let breathPhaseC = 0;
@@ -304,18 +294,15 @@ let breathCycleTimer = 0;
 let breathCycleDuration = 180 + Math.random() * 120;
 let currentBreathOffset = 0;
 
-// Glitch
 let glitchTimer = 0;
 let glitchNextAt = 600 + Math.random() * 1200;
 let glitchIntensity = 0;
 
-// Sguardo
 let eyeTargetX = 0, eyeTargetY = 0;
 let eyeCurrentX = 0, eyeCurrentY = 0;
 let mouseMovedTimer = 0;
 let mouseIsActive = false;
 
-// Emozione
 let currentEmotion = { browAngle: 0, browHeight: 0, mouthCurve: 0, eyeOpen: 1, mouthWidth: 80, headTilt: 0 };
 let targetEmotion = { ...currentEmotion };
 
@@ -328,7 +315,7 @@ const EMOTION_KEYWORDS = {
 let activeEmotion = 'neutro';
 
 // ============================================================
-// PERSISTENZA
+// PERSISTENCE
 // ============================================================
 function saveState() {
   if (!MOOD_CONFIG.persistEnabled) return;
@@ -355,7 +342,7 @@ function loadState() {
 }
 
 // ============================================================
-// GESTIONE STATI D'ANIMO
+// MOOD MANAGEMENT
 // ============================================================
 function enterSleep() {
   if (currentMood === 'sleeping') return;
@@ -371,7 +358,6 @@ function wakeUp(clickX, clickY) {
   clickTargetX = clickX;
   clickTargetY = clickY;
   tiredness = Math.min(MOOD_CONFIG.maxTiredness, tiredness + MOOD_CONFIG.tirednessPerWake);
-  // Forza 3 blink ravvicinati
   forcedBlinkQueue = 3;
   blinkPhase = 'idle';
   blinkNextDelay = 0;
@@ -402,12 +388,12 @@ function updateMoodUI() {
     document.body.classList.add('sleeping');
     container.classList.add('sleeping');
     statusEl.classList.add('sleeping');
-    statusEl.innerText = '💤 dorme...';
+    statusEl.innerText = '💤 sleeping...';
   } else if (currentMood === 'offended') {
     document.body.classList.add('offended');
     container.classList.add('offended');
     statusEl.classList.add('offended');
-    statusEl.innerText = '😠 non interrompermi!';
+    statusEl.innerText = '😠 don\'t interrupt me!';
   }
 }
 
@@ -416,7 +402,7 @@ function registerInteraction() {
 }
 
 // ============================================================
-// LOGICA DI TRANSIZIONE STATI
+// STATE TRANSITION LOGIC
 // ============================================================
 function updateMoodState() {
   const now = Date.now();
@@ -476,7 +462,7 @@ function startAmbient() {
 }
 
 function stopAmbient() {
-  if (!ambientOsc) return;
+  if (!ambientOsc || !audioCtx) return;
   const now = audioCtx.currentTime;
   ambientGain.gain.cancelScheduledValues(now);
   ambientGain.gain.linearRampToValueAtTime(0, now + 0.3);
@@ -545,7 +531,7 @@ function playOffendedSound() {
 }
 
 // ============================================================
-// PARTICELLE
+// PARTICLES
 // ============================================================
 let particles = [];
 class Particle {
@@ -586,7 +572,7 @@ class Particle {
 for (let i = 0; i < 50; i++) particles.push(new Particle());
 
 // ============================================================
-// ONDE
+// WAVES
 // ============================================================
 let waves = [];
 let waveSpawnTimer = 0;
@@ -629,7 +615,7 @@ function drawWaves(cx, cy) {
 }
 
 // ============================================================
-// SILLABE
+// SYLLABLES
 // ============================================================
 function getSyllables(text) {
   const words = text.toLowerCase().match(/[a-zàèéìòù]+/g) || [];
@@ -659,7 +645,7 @@ function extractWords(text) {
 }
 
 // ============================================================
-// VOCI
+// VOICES
 // ============================================================
 let selectedVoice = null;
 function pickItalianVoice() {
@@ -680,7 +666,7 @@ if ('speechSynthesis' in window) {
 }
 
 // ============================================================
-// EMOZIONI
+// EMOTIONS
 // ============================================================
 function detectEmotionForWord(word) {
   for (const [emotion, keywords] of Object.entries(EMOTION_KEYWORDS)) {
@@ -711,7 +697,7 @@ function processNextWord() {
 }
 
 // ============================================================
-// BOCCA
+// MOUTH
 // ============================================================
 let syllables = [];
 let currentSyllableIndex = 0;
@@ -756,7 +742,7 @@ function updateMouthAnimation() {
 }
 
 // ============================================================
-// ANIMAZIONI
+// ANIMATIONS
 // ============================================================
 function lerp(a, b, t) { return a + (b - a) * t; }
 
@@ -809,25 +795,23 @@ function updateBreath() {
 function getBreathOffset() { return currentBreathOffset; }
 
 // ============================================================
-// BLINK — nuovo sistema a stati
+// BLINK — state machine
 // ============================================================
 function startBlink(double) {
   blinkPhase = 'closing';
   blinkPhaseTimer = 0;
-  blinkCloseDuration = 4 + Math.floor(Math.random() * 3); // 4-6 frame
+  blinkCloseDuration = 4 + Math.floor(Math.random() * 3);
   blinkOpenDuration = 4 + Math.floor(Math.random() * 3);
   blinkWantsDouble = !!double;
 }
 
 function updateBlink() {
-  // In sonno gli occhi sono chiusi (gestito dal draw)
   if (currentMood === 'sleeping') {
     eyeBlink = 0;
     blinkPhase = 'idle';
     return;
   }
 
-  // Blink forzato in queue (risveglio)
   if (forcedBlinkQueue > 0 && blinkPhase === 'idle') {
     startBlink(false);
     forcedBlinkQueue--;
@@ -1101,7 +1085,7 @@ function updateGaze() {
     eyeTargetX = Math.sin(time * 0.5) * 1.5;
     eyeTargetY = Math.sin(time * 0.7) * 1.0;
   } else if (mouseIsActive) {
-    // mouse guida
+    // mouse drives gaze
   } else if (wanderActive) {
     eyeTargetX = wanderTargetX;
     eyeTargetY = wanderTargetY;
@@ -1130,7 +1114,6 @@ function updateGlitch() {
   }
 }
 
-// === Z DEL SONNO ===
 function updateSleepZs(cx, cy) {
   if (currentMood !== 'sleeping') {
     sleepZs = [];
@@ -1178,7 +1161,7 @@ function drawSleepZs() {
 }
 
 // ============================================================
-// DISEGNO
+// DRAWING
 // ============================================================
 function drawAvatar() {
   ctx.clearRect(0, 0, LOGICAL_SIZE, LOGICAL_SIZE);
@@ -1200,225 +1183,220 @@ function drawAvatar() {
   updateGaze();
   updateGlitch();
   updateWaves();
-
-  // Bocca: aggiorna l'interpolazione PRIMA del disegno
   mouthOpen += (targetMouthOpen - mouthOpen) * 0.35;
 
-  const cx = LOGICAL_SIZE / 2;
-  const cy = LOGICAL_SIZE / 2 + getBreathOffset();
+  const cx = 210;
+  const cy = 205 + getBreathOffset();
+  const isOffended = currentMood === 'offended';
+  const faceColor = isOffended ? '#ff8888' : '#00ff9d';
+  const faceGlow = isOffended ? 'rgba(255,120,120,0.8)' : 'rgba(0,255,157,0.8)';
 
   updateSleepZs(cx, cy);
 
-  let baseIntensity = 0.15;
-  if (currentMood === 'sleeping') baseIntensity = 0.05;
-  if (currentMood === 'offended') baseIntensity = 0.25;
-  const speakIntensity = isSpeaking ? Math.min(1, 0.3 + mouthOpen * 0.7) : 0;
-  const intensity = Math.max(baseIntensity, speakIntensity);
-  particles.forEach(p => { p.update(intensity); p.draw(); });
-
-  ctx.save();
-  if (glitchIntensity > 0) {
-    ctx.translate(
-      (Math.random() - 0.5) * glitchIntensity * 8,
-      (Math.random() - 0.5) * glitchIntensity * 4
-    );
-  }
-
-  drawWaves(cx, cy);
-
-  const gIntensity = isSpeaking ? 0.3 + targetMouthOpen * 0.4 : (currentMood === 'sleeping' ? 0.05 : 0.1);
-  const gradient = ctx.createRadialGradient(cx, cy, 100, cx, cy, 240);
-  if (currentMood === 'offended') {
-    gradient.addColorStop(0, `rgba(255,120,120,${gIntensity * 0.4})`);
-  } else {
-    gradient.addColorStop(0, `rgba(0,255,136,${gIntensity * 0.3})`);
-  }
-  gradient.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = gradient;
+  const intensity = currentMood === 'sleeping' ? 0.045 : (isSpeaking ? 0.16 + mouthOpen * 0.12 : 0.075);
+  const halo = ctx.createRadialGradient(cx, cy, 25, cx, cy, 190);
+  halo.addColorStop(0, isOffended ? `rgba(255,120,120,${intensity})` : `rgba(0,255,157,${intensity})`);
+  halo.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = halo;
   ctx.fillRect(0, 0, LOGICAL_SIZE, LOGICAL_SIZE);
+
+  const particleIntensity = isSpeaking ? Math.min(1, 0.3 + mouthOpen * 0.7) : (currentMood === 'sleeping' ? 0.03 : 0.1);
+  particles.forEach(p => { p.update(particleIntensity); p.draw(); });
 
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(currentEmotion.headTilt + headDriftCurrent);
   ctx.translate(-cx, -cy);
+  ctx.translate(0, getBreathOffset());
 
-  ctx.save();
-  ctx.strokeStyle = currentMood === 'offended' ? '#ff8888' : COLOR_MAIN;
-  ctx.lineWidth = 3;
-  ctx.shadowBlur = 25;
-  ctx.shadowColor = currentMood === 'offended' ? 'rgba(255,120,120,0.8)' : COLOR_GLOW;
-  ctx.beginPath(); ctx.arc(cx, cy, 180, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = faceColor;
+  ctx.lineWidth = 2.6;
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = faceGlow;
   ctx.beginPath();
-  ctx.arc(cx, cy, 165, 0, Math.PI * 2);
-  ctx.strokeStyle = currentMood === 'offended' ? 'rgba(255,120,120,0.3)' : 'rgba(0,255,136,0.3)';
-  ctx.lineWidth = 1;
+  ctx.moveTo(125, 145);
+  ctx.quadraticCurveTo(135, 85, 210, 82);
+  ctx.quadraticCurveTo(285, 85, 295, 145);
+  ctx.lineTo(287, 242);
+  ctx.quadraticCurveTo(278, 296, 210, 310);
+  ctx.quadraticCurveTo(142, 296, 133, 242);
+  ctx.closePath();
   ctx.stroke();
-  ctx.strokeStyle = currentMood === 'offended' ? 'rgba(255,120,120,0.15)' : 'rgba(0,255,136,0.15)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 6; i++) {
-    const angle = (i / 6) * Math.PI * 2 + time * 0.2;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.cos(angle) * 165, cy + Math.sin(angle) * 165);
-    ctx.stroke();
-  }
-  ctx.restore();
+  ctx.shadowBlur = 0;
 
-  const reflectionOffsetY = reflectionActive * -4;
-  const eyeY = cy - 40 + reflectionOffsetY;
-  const eyeOffsetX = 60;
-  const baseEyeRadius = 20;
-  const reflectionEyeFactor = 1 - reflectionActive * 0.25;
-  const eyeRadius = baseEyeRadius * currentEmotion.eyeOpen * reflectionEyeFactor;
+  ctx.strokeStyle = isOffended ? 'rgba(255,120,120,0.38)' : 'rgba(0,255,157,0.38)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(143, 150);
+  ctx.quadraticCurveTo(150, 105, 210, 102);
+  ctx.quadraticCurveTo(270, 105, 277, 150);
+  ctx.stroke();
 
-  if (currentMood === 'sleeping') {
-    ctx.save();
-    ctx.strokeStyle = COLOR_MAIN;
-    ctx.lineWidth = 2;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = COLOR_GLOW;
-    ctx.beginPath();
-    ctx.arc(cx - eyeOffsetX, eyeY, 15, 0.15 * Math.PI, 0.85 * Math.PI);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx + eyeOffsetX, eyeY, 15, 0.15 * Math.PI, 0.85 * Math.PI);
-    ctx.stroke();
-    ctx.restore();
-  } else {
-    drawEye(cx - eyeOffsetX, eyeY, eyeRadius);
-    drawEye(cx + eyeOffsetX, eyeY, eyeRadius);
-  }
-
-  const reflectionBrowOffset = reflectionActive * 3;
-  drawEyebrowWithOffset(cx - eyeOffsetX, eyeY - eyeRadius - 12 - reflectionBrowOffset, 1);
-  drawEyebrowWithOffset(cx + eyeOffsetX, eyeY - eyeRadius - 12 - reflectionBrowOffset, -1);
-
-  ctx.save();
-  ctx.strokeStyle = COLOR_DIM;
+  ctx.strokeStyle = faceColor;
   ctx.lineWidth = 2;
-  ctx.shadowBlur = 10;
-  ctx.shadowColor = COLOR_DIM;
+  ctx.strokeRect(112, 170, 18, 48);
+  ctx.strokeRect(290, 170, 18, 48);
+  drawCyberLine(115, 181, 125, 181, 0.9, faceColor);
+  drawCyberLine(295, 181, 305, 181, 0.9, faceColor);
+
+  drawCyberEyebrow(174, 157, 1, faceColor, faceGlow);
+  drawCyberEyebrow(246, 157, -1, faceColor, faceGlow);
+
+  drawCyberEye(174, 183, faceColor, faceGlow);
+  drawCyberEye(246, 183, faceColor, faceGlow);
+
+  ctx.strokeStyle = isOffended ? 'rgba(255,120,120,0.7)' : 'rgba(0,255,157,0.58)';
+  ctx.lineWidth = 1.7;
   ctx.beginPath();
-  ctx.moveTo(cx, eyeY + 30);
-  ctx.lineTo(cx, cy + 30);
+  ctx.moveTo(210, 191);
+  ctx.lineTo(203, 218);
+  ctx.lineTo(215, 220);
   ctx.stroke();
+
+  drawCyberMouth(210, 245, faceColor, faceGlow);
+
+  drawCyberLine(149, 264, 166, 279, 0.55, faceColor);
+  drawCyberLine(166, 279, 183, 279, 0.55, faceColor);
+  drawCyberLine(271, 264, 254, 279, 0.55, faceColor);
+  drawCyberLine(254, 279, 237, 279, 0.55, faceColor);
+  drawCyberLine(185, 291, 235, 291, 0.7, faceColor);
+  drawCyberLine(192, 300, 228, 300, 0.4, faceColor);
   ctx.restore();
 
-  drawMouth(cx, cy + 80);
-
-  ctx.restore();
-  ctx.restore();
-
-  if (glitchIntensity > 0.2) {
+  if (glitchIntensity > 0.2 && currentMood !== 'sleeping') {
     ctx.save();
-    ctx.globalAlpha = glitchIntensity * 0.4;
-    ctx.fillStyle = COLOR_MAIN;
+    ctx.globalAlpha = glitchIntensity * 0.28;
+    ctx.fillStyle = faceColor;
     for (let i = 0; i < 4; i++) {
       const y = Math.random() * LOGICAL_SIZE;
-      const h = 1 + Math.random() * 3;
-      ctx.fillRect(0, y, LOGICAL_SIZE, h);
+      ctx.fillRect(0, y, LOGICAL_SIZE, 1 + Math.random() * 3);
     }
     ctx.restore();
   }
 
   drawSleepZs();
-}
 
-function drawEye(x, y, radius) {
   ctx.save();
-  ctx.strokeStyle = COLOR_MAIN;
+  ctx.strokeStyle = isOffended ? 'rgba(255,120,120,0.6)' : 'rgba(0,255,157,0.55)';
   ctx.lineWidth = 2;
-  ctx.shadowBlur = 15;
-  ctx.shadowColor = COLOR_GLOW;
-  ctx.beginPath();
-  if (eyeBlink > 0.85) {
-    // Occhio praticamente chiuso: linea orizzontale
-    ctx.moveTo(x - radius, y);
-    ctx.lineTo(x + radius, y);
-    ctx.stroke();
-  } else {
-    // Occhio aperto, ma la palpebra può coprire parzialmente
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.stroke();
-    const pupilX = x + eyeCurrentX + saccadeX + Math.sin(time * 0.7) * 1.5;
-    const pupilY = y + eyeCurrentY + saccadeY + Math.sin(time * 1.1) * 1.5;
-    const pupilRadius = radius * 0.4 * pupilScale;
-    ctx.beginPath();
-    ctx.arc(pupilX, pupilY, pupilRadius, 0, Math.PI * 2);
-    ctx.fillStyle = COLOR_MAIN;
-    ctx.shadowBlur = 20;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(pupilX - 3, pupilY - 3, Math.max(2, radius * 0.15), 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowBlur = 15;
-    ctx.shadowColor = '#ffffff';
-    ctx.fill();
-  }
+  drawCyberLine(25, 48, 25, 25, 0.9, faceColor);
+  drawCyberLine(25, 25, 48, 25, 0.9, faceColor);
+  drawCyberLine(372, 25, 395, 25, 0.9, faceColor);
+  drawCyberLine(395, 25, 395, 48, 0.9, faceColor);
+  drawCyberLine(25, 372, 25, 395, 0.9, faceColor);
+  drawCyberLine(25, 395, 48, 395, 0.9, faceColor);
+  drawCyberLine(372, 395, 395, 395, 0.9, faceColor);
+  drawCyberLine(395, 372, 395, 395, 0.9, faceColor);
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = faceGlow;
+  ctx.fillStyle = isOffended ? '#ffaaaa' : 'rgba(0,255,157,0.72)';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('CB-01', 39, 45);
+  ctx.textAlign = 'right';
+  const systemLabel = currentMood === 'sleeping' ? 'SLEEP MODE' : (isSpeaking ? 'VOICE ACTIVE' : 'SYSTEM READY');
+  ctx.fillText(systemLabel, 381, 386);
   ctx.restore();
 }
 
-function drawEyebrowWithOffset(x, y, side) {
-  const w = 30;
-  const angle = currentEmotion.browAngle * 0.35;
-  const offsetY = currentEmotion.browHeight - browTwitchAmount;
-  const reflectAngle = reflectionActive * -0.15 * side;
-  const finalAngle = angle + reflectAngle;
-
+function drawCyberLine(x1, y1, x2, y2, alpha = 1, color = COLOR_MAIN) {
   ctx.save();
-  ctx.strokeStyle = currentMood === 'offended' ? '#ff8888' : COLOR_MAIN;
-  ctx.lineWidth = 4;
-  ctx.lineCap = 'round';
-  ctx.shadowBlur = 12;
-  ctx.shadowColor = currentMood === 'offended' ? 'rgba(255,120,120,0.8)' : COLOR_GLOW;
-  const innerX = x - side * w / 2;
-  const outerX = x + side * w / 2;
-  const innerY = y + offsetY + finalAngle * w * 0.5;
-  const outerY = y + offsetY - finalAngle * w * 0.5;
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.8;
   ctx.beginPath();
-  ctx.moveTo(innerX, innerY);
-  ctx.lineTo(outerX, outerY);
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
   ctx.stroke();
   ctx.restore();
 }
 
-function drawMouth(x, y) {
+function drawCyberEyebrow(x, y, side, color, glow) {
   ctx.save();
-  ctx.strokeStyle = currentMood === 'offended' ? '#ff8888' : COLOR_MAIN;
-  ctx.lineWidth = 3;
-  ctx.shadowBlur = 20;
-  ctx.shadowColor = currentMood === 'offended' ? 'rgba(255,120,120,0.8)' : COLOR_GLOW;
-  const yawnOpen = yawnActive * 0.9;
-  const combinedOpen = Math.max(mouthOpen, yawnOpen);
-  const mouthWidth = currentEmotion.mouthWidth;
-  const maxOpenHeight = 55;
-  const openHeight = maxOpenHeight * combinedOpen;
-  const reflectionCurve = reflectionActive * -0.4;
+  const angle = currentEmotion.browAngle * 0.22 * side;
+  const offset = currentEmotion.browHeight * 0.45 - browTwitchAmount;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3.2;
+  ctx.lineCap = 'round';
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = glow;
+  ctx.beginPath();
+  ctx.moveTo(x - 16, y + offset - angle * 15);
+  ctx.lineTo(x + 16, y + offset + angle * 15);
+  ctx.stroke();
+  ctx.restore();
+}
 
-  if (openHeight > 8) {
-    const twitchOffsetY = mouthTwitchActive * mouthTwitchDir * 1.5;
+function drawCyberEye(x, y, color, glow) {
+  ctx.save();
+  ctx.shadowBlur = 13;
+  ctx.shadowColor = glow;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2.5;
+
+  const eyeHeight = Math.max(0.12, currentEmotion.eyeOpen) * (1 - Math.min(1, eyeBlink));
+  if (currentMood === 'sleeping' || eyeHeight < 0.22) {
     ctx.beginPath();
-    ctx.ellipse(x, y + twitchOffsetY, mouthWidth / 2, openHeight / 2, 0, 0, Math.PI * 2);
+    ctx.moveTo(x - 16, y);
+    ctx.quadraticCurveTo(x, y + 7, x + 16, y);
     ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  const halfH = 10.5 * Math.min(1, eyeHeight);
+  ctx.beginPath();
+  ctx.moveTo(x - 17, y - halfH);
+  ctx.lineTo(x + 16, y - halfH);
+  ctx.lineTo(x + 11, y + halfH);
+  ctx.lineTo(x - 12, y + halfH);
+  ctx.closePath();
+  ctx.fill();
+
+  const px = x + Math.max(-5, Math.min(5, eyeCurrentX + saccadeX));
+  const py = y + Math.max(-3, Math.min(3, eyeCurrentY + saccadeY));
+  const pupilW = 7 * pupilScale;
+  const pupilH = Math.max(3, 11 * pupilScale * Math.min(1, eyeHeight));
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#062016';
+  ctx.fillRect(px - pupilW / 2, py - pupilH / 2, pupilW, pupilH);
+  ctx.fillStyle = '#f0fff8';
+  ctx.beginPath();
+  ctx.arc(px - 1.5, py - 2, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawCyberMouth(x, y, color, glow) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = 'rgba(0,15,9,0.94)';
+  ctx.lineWidth = 2.5;
+  ctx.shadowBlur = 14;
+  ctx.shadowColor = glow;
+
+  const combinedOpen = currentMood === 'sleeping' ? 0 : Math.max(mouthOpen, yawnActive * 0.9);
+  const mouthWidth = 56 + (currentEmotion.mouthWidth - 80) * 0.22;
+  const openHeight = 42 * combinedOpen;
+  const twitchOffsetY = mouthTwitchActive * mouthTwitchDir * 1.5;
+
+  if (openHeight > 5.5) {
     ctx.beginPath();
-    ctx.ellipse(x, y + twitchOffsetY, mouthWidth / 2 - 3, openHeight / 2 - 3, 0, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(0,20,10,${0.5 + combinedOpen * 0.5})`;
+    ctx.ellipse(x, y + twitchOffsetY, mouthWidth / 2, Math.max(3, openHeight / 2), 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.stroke();
     if (combinedOpen > 0.5) {
+      ctx.fillStyle = 'rgba(0,255,157,0.55)';
       ctx.beginPath();
-      ctx.ellipse(x, y + twitchOffsetY + openHeight * 0.15, mouthWidth / 3, openHeight / 4, 0, 0, Math.PI * 2);
-      ctx.fillStyle = COLOR_MAIN + '99';
+      ctx.ellipse(x, y + twitchOffsetY + openHeight * 0.16, mouthWidth / 3, Math.max(2, openHeight / 4), 0, 0, Math.PI * 2);
       ctx.fill();
     }
   } else {
-    const curve = currentEmotion.mouthCurve + reflectionCurve;
-    const twitchCurve = mouthTwitchActive * mouthTwitchDir * 0.7;
-    const totalCurve = curve + twitchCurve;
-    const halfW = mouthWidth / 2;
-    const controlY = y + totalCurve * 22;
+    const curve = currentEmotion.mouthCurve + reflectionActive * -0.4 + mouthTwitchActive * mouthTwitchDir * 0.7;
     ctx.beginPath();
-    ctx.moveTo(x - halfW, y);
-    ctx.quadraticCurveTo(x, controlY, x + halfW, y);
+    ctx.moveTo(x - mouthWidth / 2, y + twitchOffsetY);
+    ctx.quadraticCurveTo(x, y + twitchOffsetY + curve * 5, x + mouthWidth / 2, y + twitchOffsetY);
     ctx.stroke();
   }
   ctx.restore();
@@ -1433,7 +1411,7 @@ function renderLoop() {
 }
 
 // ============================================================
-// SINTESI VOCALE
+// SPEECH SYNTHESIS
 // ============================================================
 let utterance = null;
 let fallbackWordInterval = null;
@@ -1449,7 +1427,7 @@ function updateStatus(text, cls) {
 
 function speak() {
   if (!('speechSynthesis' in window)) {
-    updateStatus('⚠ sintesi vocale non supportata');
+    updateStatus('⚠ speech synthesis not supported');
     return;
   }
   if (currentMood === 'sleeping') return;
@@ -1480,7 +1458,7 @@ function speak() {
   utterance.onstart = () => {
     isSpeaking = true;
     container.classList.add('speaking');
-    updateStatus('■ clicca per fermare', 'speaking');
+    updateStatus('■ click to stop', 'speaking');
     playStartBeep();
     startAmbient();
   };
@@ -1495,7 +1473,7 @@ function speak() {
     activeEmotion = 'neutro';
     emotionHoldFrames = 0;
     container.classList.remove('speaking');
-    updateStatus('✓ fine — clicca per riascoltare', 'done');
+    updateStatus('✓ done — click to replay', 'done');
     playEndBeep();
     stopAmbient();
     registerInteraction();
@@ -1509,7 +1487,7 @@ function speak() {
     activeEmotion = 'neutro';
     emotionHoldFrames = 0;
     container.classList.remove('speaking');
-    updateStatus('✗ errore — clicca per riprovare', 'done');
+    updateStatus('✗ error — click to retry', 'done');
     stopAmbient();
     if (fallbackWordInterval) { clearInterval(fallbackWordInterval); fallbackWordInterval = null; }
   };
@@ -1534,7 +1512,7 @@ function stopSpeaking() {
 }
 
 // ============================================================
-// INTERAZIONE
+// INTERACTION
 // ============================================================
 function handleInteraction(clickX, clickY) {
   registerInteraction();
@@ -1556,7 +1534,7 @@ function handleInteraction(clickX, clickY) {
     stopSpeaking();
     getOffended();
     playOffendedSound();
-    updateStatus('😠 non interrompermi!', 'offended');
+    updateStatus('😠 don\'t interrupt me!', 'offended');
     return;
   }
 
@@ -1588,13 +1566,13 @@ document.addEventListener('keydown', (e) => {
     if (isSpeaking) {
       stopSpeaking();
       registerInteraction();
-      updateStatus('■ fermato');
+      updateStatus('■ stopped');
     }
   }
 });
 
 // ============================================================
-// AVVIO
+// STARTUP
 // ============================================================
 loadState();
 updateMoodUI();
