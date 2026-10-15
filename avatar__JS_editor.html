@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Source Editor — Avatar</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    background-color: #000d06; color: #00ff88;
+    font-family: 'Courier New', Courier, monospace;
+    background-image:
+      radial-gradient(circle at 50% 0%, rgba(0,255,136,0.08) 0%, transparent 60%),
+      linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+    background-size: 100% 100%, 30px 30px, 30px 30px;
+    padding: 24px 16px 60px; min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { text-align: center; margin-bottom: 28px; }
+  h1 { font-size: clamp(18px, 3vw, 26px); letter-spacing: 4px; text-shadow: 0 0 14px rgba(0,255,136,0.7); margin-bottom: 6px; }
+  .sub { color: #00cc66; font-size: 12px; letter-spacing: 2px; opacity: 0.75; }
+  main { max-width: 900px; margin: 0 auto; }
+
+  .loader {
+    border: 1px solid rgba(0,255,157,0.3); border-radius: 12px; padding: 40px 24px; text-align: center;
+    background: rgba(0,255,157,0.03);
+    box-shadow: 0 0 30px rgba(0,255,157,0.06), inset 0 0 40px rgba(0,255,157,0.03);
+    margin-bottom: 20px;
+  }
+  .loader p { margin-bottom: 16px; font-size: 14px; letter-spacing: 1px; }
+  .loader .hint { font-size: 11px; opacity: 0.6; margin-top: 18px; letter-spacing: 1px; }
+  code { background: rgba(0,255,136,0.1); padding: 2px 6px; border-radius: 4px; color: #00ffaa; }
+  
+  .file-btn {
+    display: inline-block; padding: 12px 28px; border: 1px solid #00ff88; border-radius: 8px; color: #00ff88;
+    background: rgba(0,255,136,0.08); cursor: pointer; font-family: inherit; font-size: 14px; letter-spacing: 2px;
+    transition: all 0.2s; text-transform: uppercase;
+  }
+  .file-btn:hover { background: rgba(0,255,136,0.18); box-shadow: 0 0 20px rgba(0,255,136,0.3); }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 12px 16px;
+    border: 1px solid rgba(0,255,157,0.2); border-radius: 10px; background: rgba(0,255,157,0.03); flex-wrap: wrap;
+  }
+  .toolbar .filename { flex: 1; font-size: 12px; letter-spacing: 1px; opacity: 0.85; min-width: 140px; }
+
+  button {
+    font-family: inherit; background: transparent; color: #00ff88; border: 1px solid rgba(0,255,136,0.45);
+    padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; letter-spacing: 1.5px;
+    text-transform: uppercase; transition: all 0.15s;
+  }
+  button:hover { background: rgba(0,255,136,0.12); border-color: #00ff88; box-shadow: 0 0 12px rgba(0,255,136,0.3); }
+  button:active { transform: scale(0.97); }
+
+  .card {
+    border: 1px solid rgba(0,255,157,0.22); border-radius: 10px; background: rgba(0,255,157,0.03);
+    padding: 16px; margin-bottom: 16px; box-shadow: 0 0 18px rgba(0,255,157,0.04);
+  }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .card-title { font-size: 13px; letter-spacing: 1.5px; color: #00cc66; }
+  .desc { font-size: 11px; opacity: 0.6; letter-spacing: 0.5px; margin-bottom: 12px; line-height: 1.5; }
+
+  textarea {
+    width: 100%; height: 320px; background: rgba(0,0,0,0.5); color: #00ff88;
+    border: 1px solid rgba(0,255,136,0.3); border-radius: 8px; padding: 14px;
+    font-family: 'Courier New', Courier, monospace; font-size: 13px; line-height: 1.5;
+    outline: none; resize: vertical;
+  }
+  textarea:focus { border-color: #00ff88; box-shadow: 0 0 12px rgba(0,255,136,0.35); }
+
+  .output {
+    margin-top: 20px; padding: 20px; border: 1px solid rgba(0,255,157,0.3); border-radius: 10px;
+    background: rgba(0,255,157,0.05); display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  }
+  #generateBtn { background: rgba(0,255,136,0.15); border-color: #00ff88; padding: 12px 24px; font-size: 13px; width: 100%; }
+  #generateBtn:hover { background: rgba(0,255,136,0.28); box-shadow: 0 0 22px rgba(0,255,136,0.5); }
+
+  .flash {
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: rgba(0,30,15,0.95); color: #00ff88; padding: 12px 28px; border: 1px solid #00ff88; border-radius: 8px;
+    font-size: 13px; letter-spacing: 2px; box-shadow: 0 0 30px rgba(0,255,136,0.4); opacity: 0; transition: all 0.3s;
+    pointer-events: none; z-index: 9999;
+  }
+  .flash.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>◈ AUDIO SOURCE EDITOR ◈</h1>
+  <p class="sub">GESTIONE TESTO LETTURA AVATAR — `audio_sourge.js`</p>
+</header>
+
+<main>
+  <!-- Schermata di caricamento / scelta iniziale -->
+  <section class="loader" id="loaderSection">
+    <p>Seleziona un file esistente o parti da zero</p>
+    <label class="file-btn">
+      <input type="file" accept=".txt,.js,.mjs" id="fileInput" hidden>
+      📁 APRI FILE (.TXT o .JS)
+    </label>
+    <p class="hint">Oppure <a href="#" id="skipLink" style="color: #00ffaa; text-decoration: underline; cursor: pointer;">scrivi direttamente da zero</a></p>
+  </section>
+
+  <!-- Editor principale -->
+  <section id="editorSection" hidden>
+    <div class="toolbar">
+      <span class="filename" id="loadedName">📄 Nuovo testo</span>
+      <button id="clearBtn">🗑 Pulisci</button>
+      <button id="reloadLoaderBtn">📁 Apri altro file</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">TESTO LETTO DALL'AVATAR (Tasto L)</span>
+      </div>
+      <p class="desc">
+        Modifica liberamente il testo. Punteggiatura e spaziature normali verranno gestite automaticamente dal tool al momento del salvataggio nel formato corretto.
+      </p>
+      <textarea id="textArea" placeholder="Scrivi o incolla qui il testo..."></textarea>
+    </div>
+
+    <div class="output">
+      <button id="generateBtn">💾 ESPORTA COME <code>audio_sourge.js</code></button>
+    </div>
+  </section>
+</main>
+
+<script>
+const loaderSection = document.getElementById('loaderSection');
+const editorSection = document.getElementById('editorSection');
+const fileInput = document.getElementById('fileInput');
+const skipLink = document.getElementById('skipLink');
+const reloadLoaderBtn = document.getElementById('reloadLoaderBtn');
+const clearBtn = document.getElementById('clearBtn');
+const textArea = document.getElementById('textArea');
+const loadedName = document.getElementById('loadedName');
+const generateBtn = document.getElementById('generateBtn');
+
+function openEditor(name = 'Nuovo testo') {
+  loadedName.textContent = '📄 ' + name;
+  loaderSection.hidden = true;
+  editorSection.hidden = false;
+}
+
+skipLink.addEventListener('click', (e) => {
+  e.preventDefault();
+  textArea.value = '';
+  openEditor('Testo da zero');
+});
+
+reloadLoaderBtn.addEventListener('click', () => {
+  editorSection.hidden = true;
+  loaderSection.hidden = false;
+});
+
+// Importazione file .txt o .js esistente (es. audio_sourge.js)
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    let content = await file.text();
+    
+    // Se è un file .js (come audio_sourge.js), estrae automaticamente il testo racchiuso tra i backtick
+    if (file.name.endsWith('.js') || file.name.endsWith('.mjs')) {
+      const match = content.match(/window\.AUDIO_SOURGE\s*=\s*`([\s\S]*?)`;/);
+      if (match) {
+        content = match[1];
+      }
+    }
+    
+    textArea.value = content;
+    openEditor(file.name);
+  } catch (err) {
+    alert('Errore di lettura del file: ' + err.message);
+  }
+  fileInput.value = '';
+});
+
+clearBtn.addEventListener('click', () => {
+  if (confirm('Vuoi davvero cancellare tutto il testo?')) {
+    textArea.value = '';
+  }
+});
+
+// Esportazione pulita nel formato esatto richiesto da audio_sourge.js
+generateBtn.addEventListener('click', async () => {
+  const rawText = textArea.value;
+  
+  // Mette in sicurezza eventuali backtick o interpolazioni nel testo inserito dall'utente
+  const safeText = rawText.replace(/`/g, "'").replace(/\$\{/g, "$_");
+
+  const fileContent = `// ============================================================
+// audio_sourge.js — testo che l'avatar legge quando premi L
+//
+// - Tienilo nella STESSA cartella di avatar.html (anche su GitHub Pages).
+// - Il nome deve essere esattamente: audio_sourge.js (tutto minuscolo).
+// - Scrivi il testo tra i backtick. Una riga vuota = nuovo paragrafo (pausa più lunga).
+// - Non usare il carattere \` né la sequenza \${ dentro il testo.
+// - Il file viene riletto a ogni pressione di L: salvi, premi L e senti la versione nuova.
+// ============================================================
+window.AUDIO_SOURGE = \`${safeText}\`;
+`;
+
+  const filename = 'audio_sourge.js';
+
+  // Tentativo di scrittura diretta tramite File System Access API (se supportata dal browser)
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: 'JavaScript file', accept: { 'text/javascript': ['.js'] } }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(fileContent);
+      await writable.close();
+      flash('✅ SALVATO CORRETTAMENTE COME audio_sourge.js');
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      console.warn('showSaveFilePicker saltato, utilizzo il download standard', err);
+    }
+  }
+
+  // Fallback con download automatico del file formattato correttamente
+  const blob = new Blob([fileContent], { type: 'text/javascript;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  flash('✅ FILE SCARICATO: audio_sourge.js');
+});
+
+function flash(msg) {
+  const el = document.createElement('div');
+  el.className = 'flash';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 350); }, 2500);
+}
+</script>
+</body>
+</html>
